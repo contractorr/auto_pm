@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from pm_agent.config.models import PMConfig
 from pm_agent.models.contracts import AgentEnvelope, AgentName, ProductContext, RunContext
@@ -18,7 +18,7 @@ class AgentExecutionContext(BaseModel):
     config: PMConfig
     repo_root: Path
     capabilities: CapabilitySnapshot | None = None
-    changed_files: list[str] = []
+    changed_files: list[str] = Field(default_factory=list)
 
 
 class BaseAgent(ABC):

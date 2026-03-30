@@ -69,3 +69,35 @@ dogfooding:
     assert config.dogfooding.credentials.username.env == "DOGFOOD_USERNAME"
     assert config.dogfooding.credentials.totp is not None
     assert config.dogfooding.credentials.totp.secret.env == "DOGFOOD_TOTP_SECRET"
+
+
+def test_storage_state_auth_requires_path(tmp_path: Path):
+    config_path = tmp_path / "pm-config.yml"
+    config_path.write_text(
+        """
+repo:
+  full_name: example/app
+dogfooding:
+  auth_strategy: storage_state
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="dogfooding.storage_state"):
+        load_pm_config(config_path)
+
+
+def test_setup_script_auth_requires_path(tmp_path: Path):
+    config_path = tmp_path / "pm-config.yml"
+    config_path.write_text(
+        """
+repo:
+  full_name: example/app
+dogfooding:
+  auth_strategy: setup_script
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="dogfooding.setup_script"):
+        load_pm_config(config_path)

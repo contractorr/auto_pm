@@ -143,7 +143,11 @@ class DogfoodingAgent(BaseAgent):
                     journeys=selected_journeys,
                     base_url=base_url,
                     artifact_root=artifact_root,
+                    repo_root=context.repo_root,
                     credentials=context.config.dogfooding.credentials,
+                    storage_state=context.config.dogfooding.storage_state,
+                    setup_script=context.config.dogfooding.setup_script,
+                    setup_script_timeout_seconds=context.config.dogfooding.setup_script_timeout_seconds,
                 )
             )
             findings = self._journey_findings(context, journeys)

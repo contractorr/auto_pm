@@ -56,6 +56,7 @@ python -m playwright install chromium
 ```
 
 To dogfood a deployed site instead of starting a local instance, set `runtime.mode: external_url`, point `runtime.service_urls` at the live base URL, and use `dogfooding.auth_strategy: credentials` with env-backed secrets. Remote login forms can then use standard `fill` steps with `{{ credentials.username }}`, `{{ credentials.password }}`, and `{{ credentials.totp_code }}` placeholders.
+For apps that already have reusable browser auth bootstrap, `dogfooding.auth_strategy` also supports `storage_state` and `setup_script`. Sensitive steps can opt into `artifact_mode: redact` or `artifact_mode: skip`, and `redact_selectors` can clear additional fields before any screenshot or accessibility snapshot is captured.
 
 For GitHub writeback, export `GITHUB_TOKEN` first. Safe rollout order:
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -77,34 +78,52 @@ class ExistingIssuesAgent(BaseAgent):
         open_prs: list[ExistingIssueRecord] = []
         status = AgentStatus.SUCCESS
 
-        try:
-            open_issues = [
-                _to_record(item, "open")
-                for item in self._client.list_open_issues(owner, repo, max_pages=self._max_pages)
-            ]
-        except GitHubAdapterError as exc:
-            status = AgentStatus.PARTIAL
-            warnings.append(AgentWarning(code="github_open_issues_failed", message=str(exc)))
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="existing-issues") as executor:
+            open_issues_future = executor.submit(
+                self._client.list_open_issues,
+                owner,
+                repo,
+                self._max_pages,
+            )
+            recent_closed_future = executor.submit(
+                self._client.list_recent_closed_issues,
+                owner,
+                repo,
+                self._max_pages,
+            )
+            open_prs_future = executor.submit(
+                self._client.list_open_pull_requests,
+                owner,
+                repo,
+                self._max_pages,
+            )
 
-        try:
-            recent_closed_issues = [
-                _to_record(item, "closed")
-                for item in self._client.list_recent_closed_issues(
-                    owner, repo, max_pages=self._max_pages
-                )
-            ]
-        except GitHubAdapterError as exc:
-            status = AgentStatus.PARTIAL
-            warnings.append(AgentWarning(code="github_closed_issues_failed", message=str(exc)))
+            try:
+                open_issues = [
+                    _to_record(item, "open")
+                    for item in open_issues_future.result()
+                ]
+            except GitHubAdapterError as exc:
+                status = AgentStatus.PARTIAL
+                warnings.append(AgentWarning(code="github_open_issues_failed", message=str(exc)))
 
-        try:
-            open_prs = [
-                _to_record(item, "open")
-                for item in self._client.list_open_pull_requests(owner, repo, max_pages=self._max_pages)
-            ]
-        except GitHubAdapterError as exc:
-            status = AgentStatus.PARTIAL
-            warnings.append(AgentWarning(code="github_open_prs_failed", message=str(exc)))
+            try:
+                recent_closed_issues = [
+                    _to_record(item, "closed")
+                    for item in recent_closed_future.result()
+                ]
+            except GitHubAdapterError as exc:
+                status = AgentStatus.PARTIAL
+                warnings.append(AgentWarning(code="github_closed_issues_failed", message=str(exc)))
+
+            try:
+                open_prs = [
+                    _to_record(item, "open")
+                    for item in open_prs_future.result()
+                ]
+            except GitHubAdapterError as exc:
+                status = AgentStatus.PARTIAL
+                warnings.append(AgentWarning(code="github_open_prs_failed", message=str(exc)))
 
         return ExistingIssuesAgentOutput(
             agent=AgentName.EXISTING_ISSUES,

@@ -44,6 +44,11 @@ dogfooding:
   #   totp:
   #     secret:
   #       env: PM_AGENT_DOGFOOD_TOTP_SECRET
+  # Or reuse an existing browser auth bootstrap:
+  # auth_strategy: storage_state
+  # storage_state: .pm-agent/auth/storage-state.json
+  # auth_strategy: setup_script
+  # setup_script: web/e2e/fixtures/auth.setup.py
   setup_script: web/e2e/fixtures/auth.setup.ts
   journeys:
     - id: login-home
@@ -63,13 +68,17 @@ dogfooding:
         #   action: fill
         #   selector: input[name="password"]
         #   value: "{{ credentials.password }}"
+        #   artifact_mode: redact
         # - id: submit-login
         #   action: click
         #   selector: button[type="submit"]
+        #   redact_selectors:
+        #     - input[name="password"]
         # - id: fill-totp
         #   action: fill
         #   selector: input[name="otp"]
         #   value: "{{ credentials.totp_code }}"
+        #   artifact_mode: skip
         - id: visit-home
           action: goto
           target: /home

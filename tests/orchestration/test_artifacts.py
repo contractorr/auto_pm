@@ -79,6 +79,37 @@ def test_collect_artifacts_and_events_from_dogfooding_output():
     assert synthesis_events[1].code == "synthesis_warning"
 
 
+def test_collect_artifacts_ignores_skipped_sensitive_steps():
+    now = datetime(2026, 3, 30, tzinfo=UTC)
+    output = DogfoodingAgentOutput(
+        agent=AgentName.DOGFOODING,
+        status=AgentStatus.SUCCESS,
+        started_at=now,
+        ended_at=now,
+        findings=[],
+        runtime_mode="external_url",
+        journeys=[
+            JourneyRun(
+                journey_id="login",
+                persona="member",
+                success=True,
+                started_at=now,
+                ended_at=now,
+                steps=[
+                    JourneyStepResult(
+                        step_id="fill-password",
+                        action="fill",
+                        success=True,
+                        artifacts_skipped=True,
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert collect_artifacts([output]) == []
+
+
 def test_persist_run_report_writes_latest_and_artifact_copy(tmp_path: Path):
     now = datetime(2026, 3, 30, tzinfo=UTC)
     report = DryRunReport(

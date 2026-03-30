@@ -33,6 +33,12 @@ class AuthStrategy(str, Enum):
     MANUAL_DISABLED = "manual_disabled"
 
 
+class ArtifactMode(str, Enum):
+    CAPTURE = "capture"
+    REDACT = "redact"
+    SKIP = "skip"
+
+
 class GitHubWriteMode(str, Enum):
     DISABLED = "disabled"
     COMMENT_ONLY = "comment_only"
@@ -157,6 +163,8 @@ class JourneyStepConfig(BaseModel):
     value: str | None = None
     wait_for: str | None = None
     expect_url: str | None = None
+    artifact_mode: ArtifactMode = ArtifactMode.CAPTURE
+    redact_selectors: list[str] = Field(default_factory=list)
     timeout_ms: int = 10000
 
 
@@ -171,13 +179,25 @@ class DogfoodingConfig(BaseModel):
     enabled: bool = True
     auth_strategy: AuthStrategy = AuthStrategy.NONE
     credentials: CredentialsAuthConfig | None = None
+    storage_state: Path | None = None
     setup_script: Path | None = None
+    setup_script_timeout_seconds: int = 120
     journeys: list[JourneyConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_auth_requirements(self) -> "DogfoodingConfig":
+        if self.storage_state is not None:
+            self.storage_state = Path(self.storage_state)
+        if self.setup_script is not None:
+            self.setup_script = Path(self.setup_script)
         if self.auth_strategy == AuthStrategy.CREDENTIALS and self.credentials is None:
             raise ValueError("dogfooding.credentials is required when auth_strategy=credentials")
+        if self.auth_strategy == AuthStrategy.STORAGE_STATE and self.storage_state is None:
+            raise ValueError("dogfooding.storage_state is required when auth_strategy=storage_state")
+        if self.auth_strategy == AuthStrategy.SETUP_SCRIPT and self.setup_script is None:
+            raise ValueError("dogfooding.setup_script is required when auth_strategy=setup_script")
+        if self.setup_script_timeout_seconds <= 0:
+            raise ValueError("dogfooding.setup_script_timeout_seconds must be positive")
         return self
 
 

@@ -37,6 +37,12 @@ def _file_contains(path: Path | None, text: str) -> bool:
     return text in path.read_text(encoding="utf-8", errors="ignore")
 
 
+def _resolve_repo_path(root: Path, path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    return path if path.is_absolute() else root / path
+
+
 def _credentials_ready(config: PMConfig, notes: list[str]) -> bool:
     credentials = config.dogfooding.credentials
     if credentials is None:
@@ -49,6 +55,28 @@ def _credentials_ready(config: PMConfig, notes: list[str]) -> bool:
             "credentials auth requested but required values are unavailable: "
             + ", ".join(missing)
         )
+        return False
+    return True
+
+
+def _storage_state_ready(root: Path, config: PMConfig, notes: list[str]) -> bool:
+    storage_state = _resolve_repo_path(root, config.dogfooding.storage_state)
+    if storage_state is None:
+        notes.append("storage_state auth requested but no dogfooding.storage_state path was configured")
+        return False
+    if not storage_state.exists():
+        notes.append(f"storage_state auth requested but file is missing: {storage_state}")
+        return False
+    return True
+
+
+def _setup_script_ready(root: Path, config: PMConfig, notes: list[str]) -> bool:
+    setup_script = _resolve_repo_path(root, config.dogfooding.setup_script)
+    if setup_script is None:
+        notes.append("setup_script auth requested but no dogfooding.setup_script path was configured")
+        return False
+    if not setup_script.exists():
+        notes.append(f"setup_script auth requested but file is missing: {setup_script}")
         return False
     return True
 
@@ -86,13 +114,15 @@ def discover_repo_capabilities(repo_root: str | Path, config: PMConfig) -> Capab
         auth_ready = test_auth_supported
     elif config.dogfooding.auth_strategy == AuthStrategy.CREDENTIALS:
         auth_ready = _credentials_ready(config, notes)
+    elif config.dogfooding.auth_strategy == AuthStrategy.STORAGE_STATE:
+        auth_ready = _storage_state_ready(root, config, notes)
+    elif config.dogfooding.auth_strategy == AuthStrategy.SETUP_SCRIPT:
+        auth_ready = _setup_script_ready(root, config, notes)
+    elif config.dogfooding.auth_strategy == AuthStrategy.MANUAL_DISABLED:
+        notes.append("manual auth is not supported for autonomous dogfooding")
+        auth_ready = False
     else:
-        auth_ready = config.dogfooding.auth_strategy in {
-            AuthStrategy.NONE,
-            AuthStrategy.STORAGE_STATE,
-            AuthStrategy.SETUP_SCRIPT,
-            AuthStrategy.MANUAL_DISABLED,
-        }
+        auth_ready = config.dogfooding.auth_strategy == AuthStrategy.NONE
     runtime_ready = docker_ready or (
         config.runtime.mode in {RuntimeMode.PREVIEW_URL, RuntimeMode.EXTERNAL_URL}
         and bool(config.runtime.service_urls)

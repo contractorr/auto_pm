@@ -186,6 +186,8 @@ class JourneyStepResult(BaseModel):
     network_errors: list[str] = Field(default_factory=list)
     screenshot_path: str | None = None
     accessibility_snapshot_path: str | None = None
+    artifacts_redacted: bool = False
+    artifacts_skipped: bool = False
     vision_notes: list[str] = Field(default_factory=list)
 
 

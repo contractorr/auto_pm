@@ -7,7 +7,10 @@ import binascii
 import hashlib
 import hmac
 import json
+import os
 import re
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +18,7 @@ from typing import Any
 
 from pm_agent.config.models import (
     AuthStrategy,
+    ArtifactMode,
     CredentialsAuthConfig,
     JourneyConfig,
     JourneyStepConfig,
@@ -36,7 +40,11 @@ class BrowserRunRequest:
     journeys: list[JourneyConfig]
     base_url: str
     artifact_root: Path
+    repo_root: Path
     credentials: CredentialsAuthConfig | None = None
+    storage_state: Path | None = None
+    setup_script: Path | None = None
+    setup_script_timeout_seconds: int = 120
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,12 @@ class ResolvedCredentials:
     totp: ResolvedTotpConfig | None = None
 
 
+@dataclass(frozen=True)
+class PreparedAuthState:
+    storage_state_path: Path | None = None
+    cleanup_paths: tuple[Path, ...] = ()
+
+
 class PlaywrightBrowserRunner:
     """Execute configured journeys with Playwright."""
 
@@ -69,13 +83,17 @@ class PlaywrightBrowserRunner:
         request.artifact_root.mkdir(parents=True, exist_ok=True)
         journeys: list[JourneyRun] = []
         credentials = _resolve_credentials(request)
+        auth_state = _prepare_auth_state(request, credentials)
 
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
                 try:
                     for journey in request.journeys:
-                        context = browser.new_context()
+                        context_kwargs: dict[str, Any] = {}
+                        if auth_state.storage_state_path is not None:
+                            context_kwargs["storage_state"] = str(auth_state.storage_state_path)
+                        context = browser.new_context(**context_kwargs)
                         page = context.new_page()
                         console_errors: list[str] = []
                         network_failures: list[str] = []
@@ -110,6 +128,8 @@ class PlaywrightBrowserRunner:
                     browser.close()
         except PlaywrightError as exc:
             raise BrowserAdapterError(str(exc)) from exc
+        finally:
+            _cleanup_auth_state(auth_state)
 
         return journeys
 
@@ -135,6 +155,9 @@ class PlaywrightBrowserRunner:
             heuristic_notes: list[str] = []
             success = True
             action_error: str | None = None
+            artifact_mode = _artifact_mode_for_step(step)
+            screenshot_path: Path | None = None
+            acc_path: Path | None = None
 
             try:
                 self._perform_step(page, step, request.auth_strategy, credentials)
@@ -150,16 +173,34 @@ class PlaywrightBrowserRunner:
                 action_error = str(exc)
                 heuristic_notes.append(f"step_failed: {exc}")
 
-            screenshot_path = request.artifact_root / journey.id / f"{index:02d}-{step.id}.png"
-            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
-            page.screenshot(path=str(screenshot_path), full_page=True)
+            selectors_to_redact = _selectors_to_redact(step, artifact_mode)
+            if artifact_mode == ArtifactMode.REDACT and not selectors_to_redact:
+                artifact_mode = ArtifactMode.SKIP
+                heuristic_notes.append(
+                    "Artifacts skipped because no redact selectors were configured for a sensitive step."
+                )
+            elif selectors_to_redact and not _clear_sensitive_fields(page, selectors_to_redact):
+                artifact_mode = ArtifactMode.SKIP
+                heuristic_notes.append(
+                    "Artifacts skipped because sensitive fields could not be cleared safely."
+                )
 
-            accessibility_snapshot = page.accessibility.snapshot()
-            acc_path = request.artifact_root / journey.id / f"{index:02d}-{step.id}-a11y.json"
-            acc_path.write_text(
-                json.dumps(accessibility_snapshot or {}, indent=2),
-                encoding="utf-8",
-            )
+            if artifact_mode != ArtifactMode.SKIP:
+                screenshot_path = request.artifact_root / journey.id / f"{index:02d}-{step.id}.png"
+                screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(screenshot_path), full_page=True)
+
+                accessibility_snapshot = page.accessibility.snapshot()
+                acc_path = request.artifact_root / journey.id / f"{index:02d}-{step.id}-a11y.json"
+                acc_path.write_text(
+                    json.dumps(accessibility_snapshot or {}, indent=2),
+                    encoding="utf-8",
+                )
+
+            if artifact_mode == ArtifactMode.REDACT:
+                heuristic_notes.append("Artifacts were captured after redacting sensitive fields.")
+            elif artifact_mode == ArtifactMode.SKIP:
+                heuristic_notes.append("Artifacts were skipped for this sensitive step.")
 
             step_console_errors = console_errors[step_console_start:]
             step_network_errors = network_failures[step_network_start:]
@@ -174,8 +215,10 @@ class PlaywrightBrowserRunner:
                     success=success,
                     console_errors=step_console_errors,
                     network_errors=step_network_errors,
-                    screenshot_path=str(screenshot_path),
-                    accessibility_snapshot_path=str(acc_path),
+                    screenshot_path=str(screenshot_path) if screenshot_path is not None else None,
+                    accessibility_snapshot_path=str(acc_path) if acc_path is not None else None,
+                    artifacts_redacted=artifact_mode == ArtifactMode.REDACT,
+                    artifacts_skipped=artifact_mode == ArtifactMode.SKIP,
                     vision_notes=heuristic_notes,
                 )
             )
@@ -258,10 +301,10 @@ def _join_url(base_or_current: str, path: str) -> str:
 
 
 def _resolve_credentials(request: BrowserRunRequest) -> ResolvedCredentials | None:
-    if request.auth_strategy != AuthStrategy.CREDENTIALS:
-        return None
     if request.credentials is None:
-        raise BrowserAdapterError("credentials auth requires dogfooding.credentials")
+        if request.auth_strategy == AuthStrategy.CREDENTIALS:
+            raise BrowserAdapterError("credentials auth requires dogfooding.credentials")
+        return None
 
     try:
         username = request.credentials.username.resolve("dogfooding.credentials.username")
@@ -278,6 +321,170 @@ def _resolve_credentials(request: BrowserRunRequest) -> ResolvedCredentials | No
         raise BrowserAdapterError(str(exc)) from exc
 
     return ResolvedCredentials(username=username, password=password, totp=resolved_totp)
+
+
+def _prepare_auth_state(
+    request: BrowserRunRequest,
+    credentials: ResolvedCredentials | None,
+) -> PreparedAuthState:
+    if request.auth_strategy == AuthStrategy.MANUAL_DISABLED:
+        raise BrowserAdapterError("manual auth is not supported for autonomous dogfooding")
+
+    if request.auth_strategy == AuthStrategy.STORAGE_STATE:
+        if request.storage_state is None:
+            raise BrowserAdapterError("storage_state auth requires dogfooding.storage_state")
+        storage_state_path = _resolve_repo_path(request.repo_root, request.storage_state)
+        if not storage_state_path.exists():
+            raise BrowserAdapterError(f"storage state file not found: {storage_state_path}")
+        return PreparedAuthState(storage_state_path=storage_state_path)
+
+    if request.auth_strategy == AuthStrategy.SETUP_SCRIPT:
+        if request.setup_script is None:
+            raise BrowserAdapterError("setup_script auth requires dogfooding.setup_script")
+        setup_script_path = _resolve_repo_path(request.repo_root, request.setup_script)
+        if not setup_script_path.exists():
+            raise BrowserAdapterError(f"setup script not found: {setup_script_path}")
+        configured_storage_state = (
+            _resolve_repo_path(request.repo_root, request.storage_state)
+            if request.storage_state is not None
+            else None
+        )
+        storage_state_path = configured_storage_state or request.artifact_root / ".auth-storage-state.json"
+        storage_state_path.parent.mkdir(parents=True, exist_ok=True)
+        _run_setup_script(
+            request=request,
+            setup_script_path=setup_script_path,
+            storage_state_path=storage_state_path,
+            credentials=credentials,
+        )
+        if not storage_state_path.exists():
+            raise BrowserAdapterError(
+                f"setup script did not create a storage state file: {storage_state_path}"
+            )
+        cleanup_paths = () if configured_storage_state is not None else (storage_state_path,)
+        return PreparedAuthState(
+            storage_state_path=storage_state_path,
+            cleanup_paths=cleanup_paths,
+        )
+
+    return PreparedAuthState()
+
+
+def _run_setup_script(
+    *,
+    request: BrowserRunRequest,
+    setup_script_path: Path,
+    storage_state_path: Path,
+    credentials: ResolvedCredentials | None,
+) -> None:
+    command = _setup_script_command(setup_script_path)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PM_AGENT_BASE_URL": request.base_url,
+            "PM_AGENT_STORAGE_STATE_PATH": str(storage_state_path),
+            "PM_AGENT_REPO_ROOT": str(request.repo_root),
+        }
+    )
+    if credentials is not None:
+        env["PM_AGENT_USERNAME"] = credentials.username
+        env["PM_AGENT_PASSWORD"] = credentials.password
+        if credentials.totp is not None:
+            env["PM_AGENT_TOTP_SECRET"] = credentials.totp.secret
+            env["PM_AGENT_TOTP_CODE"] = _generate_totp(credentials.totp)
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=request.repo_root,
+            capture_output=True,
+            text=True,
+            timeout=request.setup_script_timeout_seconds,
+            check=False,
+            env=env,
+        )
+    except FileNotFoundError as exc:
+        raise BrowserAdapterError(
+            f"setup script runner is not available for {setup_script_path.name}: {exc.filename}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise BrowserAdapterError(
+            f"setup script timed out after {request.setup_script_timeout_seconds}s"
+        ) from exc
+
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout or "").strip()
+        message = stderr or f"setup script failed with exit code {result.returncode}"
+        raise BrowserAdapterError(message)
+
+
+def _setup_script_command(setup_script_path: Path) -> list[str]:
+    suffix = setup_script_path.suffix.lower()
+    if suffix == ".py":
+        return [sys.executable, str(setup_script_path)]
+    if suffix in {".js", ".mjs", ".cjs"}:
+        return ["node", str(setup_script_path)]
+    if suffix in {".ts", ".tsx"}:
+        return ["npx", "tsx", str(setup_script_path)]
+    if suffix == ".ps1":
+        return ["powershell", "-File", str(setup_script_path)]
+    if suffix == ".sh":
+        return ["sh", str(setup_script_path)]
+    raise BrowserAdapterError(
+        f"unsupported setup script type for {setup_script_path.name}; use .py, .js, .ts, .ps1, or .sh"
+    )
+
+
+def _cleanup_auth_state(auth_state: PreparedAuthState) -> None:
+    for path in auth_state.cleanup_paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def _resolve_repo_path(repo_root: Path, path: Path) -> Path:
+    return path if path.is_absolute() else repo_root / path
+
+
+def _artifact_mode_for_step(step: JourneyStepConfig) -> ArtifactMode:
+    if step.artifact_mode != ArtifactMode.CAPTURE:
+        return step.artifact_mode
+    if step.value and _CREDENTIAL_PLACEHOLDER_PATTERN.search(step.value):
+        return ArtifactMode.REDACT
+    return ArtifactMode.CAPTURE
+
+
+def _selectors_to_redact(step: JourneyStepConfig, artifact_mode: ArtifactMode) -> list[str]:
+    selectors = list(step.redact_selectors)
+    if artifact_mode in {ArtifactMode.REDACT, ArtifactMode.SKIP} and step.action == "fill" and step.selector:
+        selectors.append(step.selector)
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for selector in selectors:
+        if selector and selector not in seen:
+            seen.add(selector)
+            ordered.append(selector)
+    return ordered
+
+
+def _clear_sensitive_fields(page: Any, selectors: list[str]) -> bool:
+    for selector in selectors:
+        try:
+            page.locator(selector).first.evaluate(
+                """element => {
+                    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+                        element.value = '';
+                        element.setAttribute('value', '');
+                        return;
+                    }
+                    element.textContent = '';
+                }"""
+            )
+        except Exception:  # noqa: BLE001
+            return False
+    return True
 
 
 def _resolve_step_value(

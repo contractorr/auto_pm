@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Callable
 
 from pm_agent.agents.base import AgentExecutionContext
 from pm_agent.agents.codebase import CodebaseAgent
@@ -137,6 +139,25 @@ def _build_run_events(*, run, trigger: Trigger, agent_outputs, synthesis: Synthe
     return events
 
 
+def _run_collection_tasks(
+    tasks: dict[str, Callable[[], object]],
+) -> dict[str, object]:
+    if not tasks:
+        return {}
+    with ThreadPoolExecutor(
+        max_workers=min(4, len(tasks)),
+        thread_name_prefix="live-collection",
+    ) as executor:
+        futures = {
+            name: executor.submit(task)
+            for name, task in tasks.items()
+        }
+        return {
+            name: future.result()
+            for name, future in futures.items()
+        }
+
+
 class LiveCollectionRunner:
     def __init__(
         self,
@@ -207,14 +228,26 @@ class LiveCollectionRunner:
             )
 
         try:
+            task_results = _run_collection_tasks(
+                {
+                    **(
+                        {}
+                        if trigger == Trigger.PUSH
+                        else {"research": lambda: self._research_agent.run(context)}
+                    ),
+                    "codebase": lambda: self._codebase_agent.run(context),
+                    "dogfooding": lambda: self._dogfooding_agent.run(context),
+                    "existing_issues": lambda: self._existing_issues_agent.run(context),
+                }
+            )
             research_output = (
                 _skipped_research_output(context)
                 if trigger == Trigger.PUSH
-                else self._research_agent.run(context)
+                else task_results["research"]
             )
-            codebase_output = self._codebase_agent.run(context)
-            dogfooding_output = self._dogfooding_agent.run(context)
-            existing_issues_output = self._existing_issues_agent.run(context)
+            codebase_output = task_results["codebase"]
+            dogfooding_output = task_results["dogfooding"]
+            existing_issues_output = task_results["existing_issues"]
 
             synthesis_input = SynthesisInput(
                 run=run,

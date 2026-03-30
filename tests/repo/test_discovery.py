@@ -54,3 +54,36 @@ def test_discovery_allows_remote_credentials_without_local_playwright_config(tmp
     assert snapshot.playwright_config is None
     assert snapshot.dogfooding_ready is True
     assert all("Playwright config" not in note for note in snapshot.notes)
+
+
+def test_discovery_requires_storage_state_file_when_requested(tmp_path: Path):
+    config = load_pm_config(Path("pm-config.example.yml"))
+    config.runtime.mode = RuntimeMode.EXTERNAL_URL
+    config.runtime.compose_file = None
+    config.runtime.start_commands = []
+    config.runtime.service_urls = ["https://dogfood.example.com"]
+    config.runtime.healthcheck_urls = []
+    config.dogfooding.auth_strategy = AuthStrategy.STORAGE_STATE
+    config.dogfooding.storage_state = Path("missing-auth.json")
+    (tmp_path / "PRODUCT.md").write_text("# Product Vision\n\nRemote dogfooding", encoding="utf-8")
+
+    snapshot = discover_repo_capabilities(tmp_path, config)
+
+    assert snapshot.dogfooding_ready is False
+    assert any("storage_state auth requested but file is missing" in note for note in snapshot.notes)
+
+
+def test_discovery_marks_manual_auth_as_not_ready(tmp_path: Path):
+    config = load_pm_config(Path("pm-config.example.yml"))
+    config.runtime.mode = RuntimeMode.EXTERNAL_URL
+    config.runtime.compose_file = None
+    config.runtime.start_commands = []
+    config.runtime.service_urls = ["https://dogfood.example.com"]
+    config.runtime.healthcheck_urls = []
+    config.dogfooding.auth_strategy = AuthStrategy.MANUAL_DISABLED
+    (tmp_path / "PRODUCT.md").write_text("# Product Vision\n\nRemote dogfooding", encoding="utf-8")
+
+    snapshot = discover_repo_capabilities(tmp_path, config)
+
+    assert snapshot.dogfooding_ready is False
+    assert "manual auth is not supported for autonomous dogfooding" in snapshot.notes

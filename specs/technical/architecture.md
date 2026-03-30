@@ -30,6 +30,7 @@
 - `push` runs should skip heavyweight research, reuse changed-file context across agents, and limit issue creation budgets more aggressively than scheduled runs.
 - overlapping live runs against the same target repo should be serialized through both workflow concurrency and a local repository lock.
 - live runs should persist a structured run report and indexed artifacts under `.pm-agent-artifacts/<run_id>/` for later audit and debugging.
+- live collection may execute independent agents concurrently when they share only read-only repo context.
 
 ## Local-First Runtime
 
@@ -56,6 +57,8 @@ The first live execution slice should support:
 - optional model-backed codebase review may refine summaries, components, and findings, but manifest and retrieval logic should remain reusable without a model
 - missing API keys or model failures must fall back to deterministic repo understanding with explicit warnings
 - dogfooding on `push` should scope journeys using changed-file hints and fall back to a minimal safe subset when no match is found
+- dogfooding should support credential placeholders, reusable storage-state auth, and external setup scripts for browser bootstrap
+- sensitive dogfooding steps must be able to redact or skip artifact capture so secrets are not persisted to screenshots or accessibility snapshots
 
 ## Deterministic Research Slice
 

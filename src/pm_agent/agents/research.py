@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import re
 from datetime import UTC, datetime
 
@@ -87,10 +88,12 @@ class ResearchAgent(BaseAgent):
         competitor_client: CompetitorResearchClient | None = None,
         arxiv_client: ArxivResearchClient | None = None,
         enhancer: AnthropicResearchEnhancer | None = None,
+        max_parallel_fetches: int = 4,
     ) -> None:
         self._competitor_client = competitor_client or CompetitorResearchClient()
         self._arxiv_client = arxiv_client or ArxivResearchClient()
         self._enhancer = enhancer
+        self._max_parallel_fetches = max_parallel_fetches
 
     def run(self, context: AgentExecutionContext) -> ResearchAgentOutput:
         started_at = datetime.now(UTC)
@@ -104,9 +107,16 @@ class ResearchAgent(BaseAgent):
         strategy_texts = [context.product.vision, *context.product.strategic_priorities]
         strategy_keywords = _priority_keywords(strategy_texts)
 
-        for url in context.config.research.competitors:
+        for url, summary, error in self._fetch_competitor_summaries(
+            context.config.research.competitors
+        ):
+            if error is not None:
+                status = AgentStatus.PARTIAL
+                warnings.append(AgentWarning(code="competitor_fetch_failed", message=str(error)))
+                continue
+            if summary is None:
+                continue
             try:
-                summary = self._competitor_client.fetch_page_summary(url)
                 competitor_review = self._review_competitor(context, summary, enhancer, warnings)
                 competitors.append(self._to_competitor_snapshot(summary, competitor_review))
                 if competitor_review is not None:
@@ -119,25 +129,25 @@ class ResearchAgent(BaseAgent):
                         findings.append(finding)
                 else:
                     findings.extend(self._competitor_findings(context, summary, strategy_keywords))
+
             except ResearchAdapterError as exc:
                 status = AgentStatus.PARTIAL
                 warnings.append(AgentWarning(code="competitor_fetch_failed", message=str(exc)))
 
-        for category in context.config.research.arxiv_categories:
-            try:
-                entries = self._arxiv_client.fetch_category_entries(category)
-                for entry in entries:
-                    paper_review = self._review_paper(context, entry, enhancer, warnings)
-                    papers.append(self._to_paper_snapshot(entry, strategy_keywords, paper_review))
-                    if paper_review is not None:
-                        finding = self._paper_finding_from_review(context, entry, paper_review)
-                        if finding is not None:
-                            findings.append(finding)
-                    else:
-                        findings.extend(self._paper_findings(context, [entry], strategy_keywords))
-            except ResearchAdapterError as exc:
+        for category, entries, error in self._fetch_arxiv_entries(context.config.research.arxiv_categories):
+            if error is not None:
                 status = AgentStatus.PARTIAL
-                warnings.append(AgentWarning(code="arxiv_fetch_failed", message=str(exc)))
+                warnings.append(AgentWarning(code="arxiv_fetch_failed", message=str(error)))
+                continue
+            for entry in entries:
+                paper_review = self._review_paper(context, entry, enhancer, warnings)
+                papers.append(self._to_paper_snapshot(entry, strategy_keywords, paper_review))
+                if paper_review is not None:
+                    finding = self._paper_finding_from_review(context, entry, paper_review)
+                    if finding is not None:
+                        findings.append(finding)
+                else:
+                    findings.extend(self._paper_findings(context, [entry], strategy_keywords))
 
         return ResearchAgentOutput(
             agent=AgentName.RESEARCH,
@@ -149,6 +159,64 @@ class ResearchAgent(BaseAgent):
             competitors=competitors,
             papers=papers,
         )
+
+    def _fetch_competitor_summaries(
+        self,
+        urls: list[str],
+    ) -> list[tuple[str, PageSummary | None, ResearchAdapterError | None]]:
+        if len(urls) <= 1:
+            results: list[tuple[str, PageSummary | None, ResearchAdapterError | None]] = []
+            for url in urls:
+                try:
+                    results.append((url, self._competitor_client.fetch_page_summary(url), None))
+                except ResearchAdapterError as exc:
+                    results.append((url, None, exc))
+            return results
+
+        with ThreadPoolExecutor(
+            max_workers=min(self._max_parallel_fetches, len(urls)),
+            thread_name_prefix="research-competitor",
+        ) as executor:
+            futures = [
+                executor.submit(self._competitor_client.fetch_page_summary, url)
+                for url in urls
+            ]
+            results = []
+            for url, future in zip(urls, futures, strict=False):
+                try:
+                    results.append((url, future.result(), None))
+                except ResearchAdapterError as exc:
+                    results.append((url, None, exc))
+            return results
+
+    def _fetch_arxiv_entries(
+        self,
+        categories: list[str],
+    ) -> list[tuple[str, list[ArxivEntry], ResearchAdapterError | None]]:
+        if len(categories) <= 1:
+            results: list[tuple[str, list[ArxivEntry], ResearchAdapterError | None]] = []
+            for category in categories:
+                try:
+                    results.append((category, self._arxiv_client.fetch_category_entries(category), None))
+                except ResearchAdapterError as exc:
+                    results.append((category, [], exc))
+            return results
+
+        with ThreadPoolExecutor(
+            max_workers=min(self._max_parallel_fetches, len(categories)),
+            thread_name_prefix="research-arxiv",
+        ) as executor:
+            futures = [
+                executor.submit(self._arxiv_client.fetch_category_entries, category)
+                for category in categories
+            ]
+            results = []
+            for category, future in zip(categories, futures, strict=False):
+                try:
+                    results.append((category, future.result(), None))
+                except ResearchAdapterError as exc:
+                    results.append((category, [], exc))
+            return results
 
     def _enhancer_for_context(
         self,

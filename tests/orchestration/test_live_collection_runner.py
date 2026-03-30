@@ -1,4 +1,5 @@
 import shutil
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -144,6 +145,51 @@ class FakeExistingIssuesAgent:
         )
 
 
+class SlowResearchAgent(FakeResearchAgent):
+    def __init__(self, started_at: dict[str, float], delay_seconds: float = 0.15) -> None:
+        super().__init__()
+        self._started_at = started_at
+        self._delay_seconds = delay_seconds
+
+    def run(self, context):
+        self._started_at["research"] = time.perf_counter()
+        time.sleep(self._delay_seconds)
+        return super().run(context)
+
+
+class SlowCodebaseAgent(FakeCodebaseAgent):
+    def __init__(self, started_at: dict[str, float], delay_seconds: float = 0.15) -> None:
+        self._started_at = started_at
+        self._delay_seconds = delay_seconds
+
+    def run(self, context: AgentExecutionContext) -> CodebaseAgentOutput:
+        self._started_at["codebase"] = time.perf_counter()
+        time.sleep(self._delay_seconds)
+        return super().run(context)
+
+
+class SlowDogfoodingAgent(FakeDogfoodingAgent):
+    def __init__(self, started_at: dict[str, float], delay_seconds: float = 0.15) -> None:
+        self._started_at = started_at
+        self._delay_seconds = delay_seconds
+
+    def run(self, context):
+        self._started_at["dogfooding"] = time.perf_counter()
+        time.sleep(self._delay_seconds)
+        return super().run(context)
+
+
+class SlowExistingIssuesAgent(FakeExistingIssuesAgent):
+    def __init__(self, started_at: dict[str, float], delay_seconds: float = 0.15) -> None:
+        self._started_at = started_at
+        self._delay_seconds = delay_seconds
+
+    def run(self, context: AgentExecutionContext) -> ExistingIssuesAgentOutput:
+        self._started_at["existing_issues"] = time.perf_counter()
+        time.sleep(self._delay_seconds)
+        return super().run(context)
+
+
 def test_live_collection_runner_executes_without_network():
     config = load_pm_config(Path("pm-config.example.yml"))
     repo_root = Path("tests/fixtures/repos/sample-app")
@@ -227,3 +273,23 @@ def test_live_collection_runner_returns_skipped_report_when_repo_is_locked(tmp_p
     assert report.synthesis.warnings
     assert report.synthesis.warnings[0].startswith("run_locked:")
     assert report.events[0].code == "run_locked"
+
+
+def test_live_collection_runner_executes_independent_agents_in_parallel():
+    config = load_pm_config(Path("pm-config.example.yml"))
+    repo_root = Path("tests/fixtures/repos/sample-app")
+    started_at: dict[str, float] = {}
+    runner = LiveCollectionRunner(
+        research_agent=SlowResearchAgent(started_at),  # type: ignore[arg-type]
+        codebase_agent=SlowCodebaseAgent(started_at),  # type: ignore[arg-type]
+        dogfooding_agent=SlowDogfoodingAgent(started_at),  # type: ignore[arg-type]
+        existing_issues_agent=SlowExistingIssuesAgent(started_at),  # type: ignore[arg-type]
+    )
+
+    started = time.perf_counter()
+    report = runner.run(repo_root, config)
+    elapsed = time.perf_counter() - started
+
+    assert len(report.agent_outputs) == 4
+    assert elapsed < 0.45
+    assert max(started_at.values()) - min(started_at.values()) < 0.12
