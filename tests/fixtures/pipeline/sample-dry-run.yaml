@@ -1,0 +1,105 @@
+run:
+  run_id: run-dry-001
+  repo: contractorr/stewardme
+  branch: main
+  trigger: schedule
+  started_at: 2026-03-30T10:00:00Z
+  config_hash: dry-run-config
+research:
+  agent: research
+  status: success
+  started_at: 2026-03-30T10:00:00Z
+  ended_at: 2026-03-30T10:02:00Z
+  findings:
+    - finding_id: research-001
+      agent: research
+      kind: competitive_gap
+      title: Onboarding does not explain first value
+      problem_statement: The product does not explain what users should do first after they sign in.
+      user_impact: New users can churn before reaching a meaningful outcome.
+      affected_surfaces:
+        - login
+        - home
+      severity: high
+      raw_confidence: 0.88
+      novelty_key: onboarding-first-value
+      dedup_keys:
+        - onboarding-first-value
+      tags:
+        - onboarding
+        - activation
+      evidence:
+        - summary: Competitors are more concrete about the first valuable action.
+          source_refs:
+            - source_type: competitor_page
+              source_id: notion-ai
+              title: Notion AI
+  competitors: []
+  papers: []
+codebase:
+  agent: codebase
+  status: success
+  started_at: 2026-03-30T10:00:00Z
+  ended_at: 2026-03-30T10:03:00Z
+  findings:
+    - finding_id: codebase-001
+      agent: codebase
+      kind: product_gap
+      title: Onboarding does not explain first value
+      problem_statement: The codebase has no explicit first-run guidance on the home surface.
+      user_impact: New users are not directed to the next useful action.
+      affected_surfaces:
+        - home
+      severity: medium
+      raw_confidence: 0.8
+      novelty_key: onboarding-first-value
+      dedup_keys:
+        - onboarding-first-value
+      tags:
+        - onboarding
+      evidence:
+        - summary: No guided first-run UI was identified in the current implementation summary.
+  repo_summary: The app has login and home flows but limited first-run guidance.
+  components: []
+  changed_files: []
+  hotspot_files: []
+dogfooding:
+  agent: dogfooding
+  status: success
+  started_at: 2026-03-30T10:00:00Z
+  ended_at: 2026-03-30T10:04:00Z
+  findings:
+    - finding_id: dogfooding-001
+      agent: dogfooding
+      kind: ux_bug
+      title: Onboarding does not explain first value
+      problem_statement: After login, the home screen does not clearly tell the user what to do next.
+      user_impact: Users can stall immediately after authentication.
+      affected_surfaces:
+        - login
+        - home
+      severity: high
+      raw_confidence: 0.86
+      novelty_key: onboarding-first-value
+      dedup_keys:
+        - onboarding-first-value
+      tags:
+        - onboarding
+        - activation
+      evidence:
+        - summary: Persona reached home successfully but lacked a clear primary next action.
+          source_refs:
+            - source_type: playwright_step
+              source_id: visit-home
+  runtime_mode: docker_compose
+  base_url: http://localhost:3000
+  journeys: []
+existing_issues:
+  agent: existing_issues
+  status: success
+  started_at: 2026-03-30T10:00:00Z
+  ended_at: 2026-03-30T10:01:00Z
+  findings: []
+  open_issues: []
+  recent_closed_issues: []
+  open_prs: []

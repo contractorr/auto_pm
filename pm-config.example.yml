@@ -1,0 +1,72 @@
+repo:
+  full_name: contractorr/stewardme
+  default_branch: main
+  product_file: PRODUCT.md
+  memory_file: .github/pm-agent-memory.json
+  project_roots:
+    - .
+  ignore_paths:
+    - venv/
+    - node_modules/
+    - .next/
+    - dist/
+
+triggers:
+  on_push_to_main: true
+  schedules:
+    - "0 9 * * 1-5"
+    - "0 9 * * 0"
+
+runtime:
+  mode: docker_compose
+  compose_file: docker-compose.yml
+  startup_timeout_seconds: 180
+  healthcheck_timeout_seconds: 120
+  service_urls:
+    - http://localhost:3000
+    - http://localhost:8000
+  healthcheck_urls:
+    - http://localhost:3000/login
+
+dogfooding:
+  enabled: true
+  auth_strategy: test_auth
+  setup_script: web/e2e/fixtures/auth.setup.ts
+  journeys:
+    - id: login-home
+      persona: junior_dev
+      start_path: /login
+      steps:
+        - id: sign-in
+          action: sign_in_test_user
+          target: junior_dev
+          expect_url: /home
+        - id: visit-home
+          action: goto
+          target: /home
+          wait_for: h1
+
+research:
+  competitors:
+    - https://www.notion.so/product/ai
+    - https://www.perplexity.ai/
+  arxiv_categories:
+    - cs.HC
+    - cs.SE
+
+github:
+  labels:
+    - ai-generated
+    - pm-agent
+    - ux
+  stale_days: 21
+  write_mode: disabled
+  update_ai_authored_issues_only: true
+
+issue_policy:
+  max_new_issues_per_run: 3
+  min_priority_score: 24.0
+  min_confidence: 3.0
+  cooldown_days_per_cluster: 14
+  auto_close_ai_issues_only: true
+  auto_close_absent_runs: 2

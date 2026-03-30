@@ -1,0 +1,177 @@
+name: reusable-pm-agent
+
+on:
+  workflow_call:
+    inputs:
+      auto_pm_repository:
+        description: Repository that hosts the pm-agent code.
+        required: false
+        type: string
+        default: contractorr/auto_pm
+      auto_pm_ref:
+        description: Ref of the pm-agent repository to install.
+        required: false
+        type: string
+        default: main
+      config_path:
+        description: Path to pm-config.yml inside the caller repository.
+        required: false
+        type: string
+        default: pm-config.yml
+      repo_root:
+        description: Relative path to the target app root inside the caller repository.
+        required: false
+        type: string
+        default: .
+      trigger:
+        description: Trigger mode passed to pm-agent.
+        required: false
+        type: string
+        default: schedule
+      write_mode:
+        description: GitHub writeback mode.
+        required: false
+        type: string
+        default: disabled
+      install_playwright:
+        description: Install Playwright browsers before running dogfooding.
+        required: false
+        type: boolean
+        default: false
+      persist_memory_commit:
+        description: Commit updated .github/pm-agent-memory.json back to the caller repository.
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      github_token:
+        required: false
+  workflow_dispatch:
+    inputs:
+      auto_pm_repository:
+        description: Repository that hosts the pm-agent code.
+        required: false
+        type: string
+        default: contractorr/auto_pm
+      auto_pm_ref:
+        description: Ref of the pm-agent repository to install.
+        required: false
+        type: string
+        default: main
+      config_path:
+        description: Path to pm-config.yml inside this repository.
+        required: false
+        type: string
+        default: pm-config.yml
+      repo_root:
+        description: Relative path to the target app root inside this repository.
+        required: false
+        type: string
+        default: .
+      trigger:
+        description: Trigger mode passed to pm-agent.
+        required: false
+        type: choice
+        options:
+          - manual
+          - push
+          - schedule
+        default: manual
+      write_mode:
+        description: GitHub writeback mode.
+        required: false
+        type: choice
+        options:
+          - disabled
+          - comment_only
+          - apply
+        default: disabled
+      install_playwright:
+        description: Install Playwright browsers before running dogfooding.
+        required: false
+        type: boolean
+        default: false
+      persist_memory_commit:
+        description: Commit updated .github/pm-agent-memory.json back to this repository.
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: target-repo
+
+      - name: Checkout auto_pm
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.auto_pm_repository }}
+          ref: ${{ inputs.auto_pm_ref }}
+          path: auto-pm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pm-agent
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./auto-pm[dev]
+
+      - name: Install Playwright browsers
+        if: ${{ inputs.install_playwright }}
+        run: python -m playwright install --with-deps chromium
+
+      - name: Validate config
+        run: pm-agent config validate "target-repo/${{ inputs.config_path }}"
+
+      - name: Run pm-agent
+        env:
+          INPUT_GITHUB_TOKEN: ${{ secrets.github_token }}
+          DEFAULT_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$INPUT_GITHUB_TOKEN" ]; then
+            export GITHUB_TOKEN="$INPUT_GITHUB_TOKEN"
+          else
+            export GITHUB_TOKEN="$DEFAULT_GITHUB_TOKEN"
+          fi
+          pm-agent run live \
+            --config "target-repo/${{ inputs.config_path }}" \
+            --repo-root "target-repo/${{ inputs.repo_root }}" \
+            --trigger "${{ inputs.trigger }}" \
+            --write-mode "${{ inputs.write_mode }}" > "target-repo/.pm-agent-run.json"
+
+      - name: Upload run report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pm-agent-run-report
+          path: target-repo/.pm-agent-run.json
+          if-no-files-found: error
+
+      - name: Commit pm-agent memory
+        if: ${{ inputs.persist_memory_commit }}
+        working-directory: target-repo
+        run: |
+          if [ ! -f ".github/pm-agent-memory.json" ]; then
+            echo "No memory file produced."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/pm-agent-memory.json
+          if git diff --cached --quiet; then
+            echo "No memory changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: update pm-agent memory"
+          git push

@@ -1,0 +1,6 @@
+required_specs:
+  - specs/technical/architecture.md
+  - specs/technical/contracts.md
+  - specs/technical/synthesis.md
+  - specs/technical/harness.md
+  - specs/functional/autonomous-maintenance.md

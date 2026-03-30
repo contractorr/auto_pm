@@ -1,0 +1,70 @@
+id: research-contract-smoke
+description: Ensure research agent fixture outputs remain compatible with the shared contract.
+agent: research
+input:
+  run:
+    run_id: run-001
+    repo: contractorr/stewardme
+    branch: main
+    trigger: schedule
+    started_at: 2026-03-30T10:00:00Z
+    config_hash: config-abc
+  product:
+    vision: Improve week-one retention by making the first experience clearer.
+    target_users:
+      - solo builders
+    non_goals:
+      - social networking
+    strategic_priorities:
+      - onboarding
+expected:
+  status: success
+  min_findings: 1
+  required_kinds:
+    - competitive_gap
+  required_tags:
+    - onboarding
+fixture_output:
+  agent: research
+  status: success
+  started_at: 2026-03-30T10:00:00Z
+  ended_at: 2026-03-30T10:05:00Z
+  findings:
+    - finding_id: finding-001
+      agent: research
+      kind: competitive_gap
+      title: Competitors frame activation more concretely than StewardMe
+      problem_statement: Landing and onboarding flows do not make first-session value concrete enough.
+      user_impact: New users may not understand what to do first after sign-in.
+      affected_surfaces:
+        - landing
+        - login
+        - home
+      affected_personas:
+        - solo builders
+      severity: medium
+      raw_confidence: 0.82
+      novelty_key: onboarding-activation-positioning
+      dedup_keys:
+        - activation-positioning
+      tags:
+        - onboarding
+        - activation
+      evidence:
+        - summary: Competitor onboarding copy is more concrete about next-step value.
+          source_refs:
+            - source_type: competitor_page
+              source_id: notion-ai
+              title: Notion AI
+              locator: https://www.notion.so/product/ai
+              excerpt: Helps users move from a blank page to useful work quickly.
+      proposed_direction: Tighten onboarding framing around first-session outcomes.
+  competitors:
+    - url: https://www.notion.so/product/ai
+      product_summary: Notion AI emphasizes concrete drafting and organization gains.
+      notable_capabilities:
+        - draft assistance
+        - search and retrieval
+      comparison_notes:
+        - messaging is more specific about immediate value
+  papers: []

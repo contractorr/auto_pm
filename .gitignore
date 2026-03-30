@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pm-agent-artifacts/
+/.pm-agent-run.json
+/.github/pm-agent-memory.json
+.venv/
+/PRODUCT.md
+/pm-config.yml

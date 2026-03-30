@@ -1,0 +1,63 @@
+# Architecture
+
+## Principles
+
+1. Specs first, code second.
+2. Deterministic normalization before any LLM synthesis.
+3. Adapters isolate third-party systems.
+4. Agents produce typed envelopes even when degraded.
+5. Autonomous issue lifecycle actions only affect AI-authored issues with metadata.
+
+## Package Boundaries
+
+- `config/` owns `pm-config.yml` parsing and validation.
+- `models/` owns stable cross-agent contracts.
+- `repo/` owns product-context loading and local capability discovery.
+- `agents/` owns data collection and summarization boundaries.
+- `synthesis/` owns normalization, clustering, scoring, deduplication, and issue writing.
+- `orchestration/` owns dry-run execution and future live run coordination.
+- `memory/` owns persistent calibration data loading and summarization.
+- `harness/` owns replayable scenarios and expectation checks.
+- future `adapters/` will own GitHub, Anthropic, Playwright, Docker, and arXiv clients.
+
+## Trigger Strategy
+
+- `push` runs should be diff-aware and budget-constrained.
+- scheduled runs should perform deeper research, broader dogfooding, and lifecycle reconciliation.
+- reusable GitHub Actions workflows should be the primary automation entrypoint for target repositories.
+- target repositories should own the real `pm-config.yml`, `PRODUCT.md`, and persisted `.github/pm-agent-memory.json`.
+
+## Local-First Runtime
+
+Before live adapters are introduced, the project must support:
+
+1. local capability discovery from a checked-out repo
+2. product-context loading from `PRODUCT.md`
+3. deterministic dry-run synthesis from typed fixture inputs
+4. replayable regression tests for the full dry-run path
+
+## Live Collection Slice
+
+The first live execution slice should support:
+
+1. a local codebase agent that summarizes the checked-out repo and emits only conservative heuristic findings
+2. a GitHub-backed existing-issues agent for open issues, open PRs, and recent closed issues
+3. a live collection runner that feeds these real agent outputs into deterministic synthesis
+4. adapter injection so tests do not depend on live network calls
+
+## Deterministic Research Slice
+
+The first research implementation should:
+
+1. fetch competitor pages deterministically without LLM summarization
+2. read arXiv category feeds through the public Atom API
+3. emit research findings only when there is explicit overlap with product priorities
+4. degrade to typed warnings when network access fails
+
+## Maintenance Contract
+
+Every material behavior change must ship with:
+
+1. a spec update
+2. a contract or harness test update
+3. a typed model change if the data shape changed
