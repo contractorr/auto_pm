@@ -13,6 +13,8 @@ def test_example_config_parses():
     assert config.dogfooding.auth_strategy == AuthStrategy.TEST_AUTH
     assert config.anthropic.enabled is False
     assert config.anthropic.model == "claude-3-7-sonnet-latest"
+    assert config.anthropic.research_review_enabled is True
+    assert config.anthropic.portfolio_review_enabled is True
     assert config.github.write_mode == GitHubWriteMode.DISABLED
     assert len(config.dogfooding.journeys) == 1
 

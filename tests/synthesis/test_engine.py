@@ -156,6 +156,7 @@ def test_engine_updates_existing_issue_when_match_found():
 
 class FakeEnhancer:
     cluster_review_enabled = True
+    portfolio_review_enabled = True
     issue_writer_enabled = True
     is_configured = True
 
@@ -171,6 +172,19 @@ class FakeEnhancer:
 
     def write_issue(self, **kwargs):
         return "## Summary\nModel-authored issue body\n<!-- pm-agent: cluster_id=test -->"
+
+    def review_portfolio(self, **kwargs):
+        return type(
+            "PortfolioReview",
+            (),
+            {
+                "keep_cluster_ids": [
+                    proposal["cluster_id"]
+                    for proposal in kwargs["proposals"][: kwargs["max_new_issues_per_run"]]
+                ],
+                "suppressed_reasons": {},
+            },
+        )()
 
 
 class SuppressingEnhancer(FakeEnhancer):
@@ -315,3 +329,169 @@ def test_engine_emits_warning_when_anthropic_enabled_without_key(monkeypatch):
 
     assert report.proposals
     assert report.warnings == ["anthropic_synthesis_disabled: ANTHROPIC_API_KEY is not set"]
+
+
+def test_engine_only_applies_issue_budget_to_create_actions():
+    research = ResearchAgentOutput.model_validate(
+        {
+            "agent": "research",
+            "status": "success",
+            "started_at": "2026-03-30T10:00:00Z",
+            "ended_at": "2026-03-30T10:05:00Z",
+            "findings": [
+                {
+                    "finding_id": "create-1",
+                    "agent": "research",
+                    "kind": "competitive_gap",
+                    "title": "Primary onboarding gap",
+                    "problem_statement": "Primary onboarding gap hurts activation.",
+                    "user_impact": "Users fail to reach value quickly.",
+                    "severity": "high",
+                    "raw_confidence": 0.95,
+                    "novelty_key": "primary-onboarding-gap",
+                    "dedup_keys": ["primary-onboarding-gap"],
+                },
+                {
+                    "finding_id": "create-2",
+                    "agent": "research",
+                    "kind": "competitive_gap",
+                    "title": "Secondary onboarding gap",
+                    "problem_statement": "Secondary onboarding gap hurts activation.",
+                    "user_impact": "Users fail to reach value quickly.",
+                    "severity": "high",
+                    "raw_confidence": 0.9,
+                    "novelty_key": "secondary-onboarding-gap",
+                    "dedup_keys": ["secondary-onboarding-gap"],
+                },
+                {
+                    "finding_id": "update-1",
+                    "agent": "research",
+                    "kind": "competitive_gap",
+                    "title": "Existing issue gap",
+                    "problem_statement": "The existing issue gap still hurts activation.",
+                    "user_impact": "Users fail to reach value quickly.",
+                    "severity": "high",
+                    "raw_confidence": 0.85,
+                    "novelty_key": "existing-issue-gap",
+                    "dedup_keys": ["existing-issue-gap"],
+                },
+            ],
+            "competitors": [],
+            "papers": [],
+        }
+    )
+    existing_issues = ExistingIssuesAgentOutput(
+        agent=AgentName.EXISTING_ISSUES,
+        status=AgentStatus.SUCCESS,
+        started_at=datetime(2026, 3, 30, 10, 0, tzinfo=UTC),
+        ended_at=datetime(2026, 3, 30, 10, 1, tzinfo=UTC),
+        open_issues=[
+            {
+                "number": 42,
+                "title": "Existing issue gap",
+                "state": "open",
+                "body_summary": "The existing issue gap still hurts activation.",
+                "labels": ["onboarding"],
+            }
+        ],
+        recent_closed_issues=[],
+        open_prs=[],
+    )
+    synthesis_input = SynthesisInput(
+        run=_run_context(),
+        product=ProductContext(vision="Improve activation."),
+        memory_digest="none",
+        research=research,
+        existing_issues=existing_issues,
+    )
+
+    report = SynthesisEngine().run(
+        synthesis_input,
+        IssuePolicyConfig(max_new_issues_per_run=1),
+    )
+
+    assert len(report.proposals) == 2
+    assert {proposal.dedup.action.value for proposal in report.proposals} == {
+        "create",
+        "update_existing",
+    }
+    assert report.suppressed[-1].reason == "issue_budget_exceeded"
+
+
+class PortfolioSelectingEnhancer(FakeEnhancer):
+    cluster_review_enabled = False
+
+    def review_portfolio(self, **kwargs):
+        chosen = next(
+            proposal["cluster_id"]
+            for proposal in kwargs["proposals"]
+            if proposal["title"] == "Secondary onboarding gap"
+        )
+        rejected = next(
+            proposal["cluster_id"]
+            for proposal in kwargs["proposals"]
+            if proposal["title"] == "Primary onboarding gap"
+        )
+        return type(
+            "PortfolioReview",
+            (),
+            {
+                "keep_cluster_ids": [chosen],
+                "suppressed_reasons": {rejected: "llm_portfolio_rejected"},
+            },
+        )()
+
+
+def test_engine_uses_portfolio_review_to_choose_create_candidates():
+    research = ResearchAgentOutput.model_validate(
+        {
+            "agent": "research",
+            "status": "success",
+            "started_at": "2026-03-30T10:00:00Z",
+            "ended_at": "2026-03-30T10:05:00Z",
+            "findings": [
+                {
+                    "finding_id": "create-1",
+                    "agent": "research",
+                    "kind": "competitive_gap",
+                    "title": "Primary onboarding gap",
+                    "problem_statement": "Primary onboarding gap hurts activation.",
+                    "user_impact": "Users fail to reach value quickly.",
+                    "severity": "high",
+                    "raw_confidence": 0.95,
+                    "novelty_key": "primary-onboarding-gap",
+                    "dedup_keys": ["primary-onboarding-gap"],
+                },
+                {
+                    "finding_id": "create-2",
+                    "agent": "research",
+                    "kind": "competitive_gap",
+                    "title": "Secondary onboarding gap",
+                    "problem_statement": "Secondary onboarding gap hurts activation.",
+                    "user_impact": "Users fail to reach value quickly.",
+                    "severity": "high",
+                    "raw_confidence": 0.8,
+                    "novelty_key": "secondary-onboarding-gap",
+                    "dedup_keys": ["secondary-onboarding-gap"],
+                },
+            ],
+            "competitors": [],
+            "papers": [],
+        }
+    )
+    synthesis_input = SynthesisInput(
+        run=_run_context(),
+        product=ProductContext(vision="Improve activation."),
+        memory_digest="none",
+        research=research,
+        existing_issues=_empty_existing_issues(),
+    )
+
+    report = SynthesisEngine(enhancer=PortfolioSelectingEnhancer()).run(
+        synthesis_input,
+        IssuePolicyConfig(max_new_issues_per_run=1),
+    )
+
+    assert len(report.proposals) == 1
+    assert report.proposals[0].title == "Secondary onboarding gap"
+    assert report.suppressed[0].reason == "llm_portfolio_rejected"

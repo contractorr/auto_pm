@@ -65,6 +65,12 @@ The first research implementation should:
 3. emit research findings only when there is explicit overlap with product priorities
 4. degrade to typed warnings when network access fails
 
+Optional model-backed research review may sit on top of the deterministic fetch layer:
+
+- deterministic source fetching remains authoritative
+- model review may refine snapshots and decide whether a source is issue-worthy
+- missing API keys or model failures must fall back to deterministic research findings with explicit warnings
+
 ## Maintenance Contract
 
 Every material behavior change must ship with:

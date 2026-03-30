@@ -14,6 +14,8 @@ from pm_agent.synthesis.prompts import (
     build_cluster_review_user_prompt,
     build_issue_writer_system_prompt,
     build_issue_writer_user_prompt,
+    build_portfolio_review_system_prompt,
+    build_portfolio_review_user_prompt,
 )
 
 
@@ -31,16 +33,23 @@ class IssueWriterResponse(BaseModel):
     issue_body_markdown: str
 
 
+class PortfolioReviewResponse(BaseModel):
+    keep_cluster_ids: list[str] = Field(default_factory=list)
+    suppressed_reasons: dict[str, str] = Field(default_factory=dict)
+
+
 class AnthropicSynthesisEnhancer:
     def __init__(
         self,
         client: AnthropicMessagesClient,
         *,
         cluster_review_enabled: bool = True,
+        portfolio_review_enabled: bool = True,
         issue_writer_enabled: bool = True,
     ) -> None:
         self._client = client
         self.cluster_review_enabled = cluster_review_enabled
+        self.portfolio_review_enabled = portfolio_review_enabled
         self.issue_writer_enabled = issue_writer_enabled
 
     @property
@@ -104,10 +113,32 @@ class AnthropicSynthesisEnhancer:
         )
         return response.issue_body_markdown
 
+    def review_portfolio(
+        self,
+        *,
+        product: ProductContext,
+        memory_digest: str,
+        max_new_issues_per_run: int,
+        proposals: list[dict[str, object]],
+    ) -> PortfolioReviewResponse:
+        if not self.portfolio_review_enabled:
+            raise AnthropicAdapterError("Anthropic portfolio review is disabled")
+        return self._client.create_json_message(
+            system_prompt=build_portfolio_review_system_prompt(),
+            user_prompt=build_portfolio_review_user_prompt(
+                product=product,
+                memory_digest=memory_digest,
+                max_new_issues_per_run=max_new_issues_per_run,
+                proposals=proposals,
+            ),
+            response_model=PortfolioReviewResponse,
+        )
+
 
 __all__ = [
     "AnthropicAdapterError",
     "AnthropicSynthesisEnhancer",
     "ClusterReviewResponse",
     "IssueWriterResponse",
+    "PortfolioReviewResponse",
 ]

@@ -96,3 +96,39 @@ def build_issue_writer_user_prompt(
         },
     }
     return json.dumps(instructions, indent=2)
+
+
+def build_portfolio_review_system_prompt() -> str:
+    return (
+        "You are a conservative PM portfolio reviewer. "
+        "You will receive multiple unmatched candidate issue proposals for one repo. "
+        "Select a small set of the highest-signal create proposals only. Return JSON only."
+    )
+
+
+def build_portfolio_review_user_prompt(
+    *,
+    product: ProductContext,
+    memory_digest: str,
+    max_new_issues_per_run: int,
+    proposals: list[dict[str, object]],
+) -> str:
+    instructions = {
+        "task": "Choose which unmatched create proposals should survive the current issue budget.",
+        "rules": [
+            "Be conservative and prefer fewer, stronger issues.",
+            "Do not select more proposals than the provided issue budget.",
+            "Only choose from the provided cluster ids.",
+            "Prefer multi-source convergence, strategic relevance, and higher confidence.",
+            "Treat updates to existing issues as already handled elsewhere; this pass only decides new issue creation.",
+        ],
+        "required_json_shape": {
+            "keep_cluster_ids": ["string"],
+            "suppressed_reasons": {"cluster_id": "short_reason"},
+        },
+        "product": product.model_dump(mode="json"),
+        "memory_digest": memory_digest,
+        "max_new_issues_per_run": max_new_issues_per_run,
+        "proposals": proposals,
+    }
+    return json.dumps(instructions, indent=2)

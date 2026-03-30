@@ -22,7 +22,9 @@ This first pass establishes the build-ready skeleton:
 - deterministic dry-run synthesis from fixture inputs
 - live local collection from a checked-out repo plus GitHub issue ingestion
 - reusable GitHub Actions workflow support for scheduled or push-driven execution in target repos
+- optional Anthropic-backed research review for competitor pages and arXiv papers with deterministic fallback
 - optional Anthropic-backed synthesis review and issue writing with deterministic fallback
+- portfolio-level synthesis budgeting so matched updates are preserved while only new issue creation consumes the per-run budget
 - architecture tests that keep the repo spec-driven over time
 
 Live integrations with GitHub, Anthropic, Playwright, Docker, and arXiv come next.

@@ -7,7 +7,8 @@
 3. optionally use an LLM for conservative cluster review and issue writing
 4. apply anchored ICE scoring
 5. deduplicate against issues, PRs, and memory
-6. emit issue actions
+6. run a portfolio-level selection pass so only `create` actions consume the per-run issue budget
+7. emit issue actions
 
 ## Minimum Deterministic Baseline
 
@@ -24,6 +25,7 @@ When Anthropic-backed synthesis is enabled:
 
 - deterministic scoring and deduplication remain authoritative
 - model review may refine wording or suppress weak unmatched proposals
+- model-backed portfolio review may reorder or suppress unmatched `create` proposals, but must not drop matched update/comment targets
 - model review must not rewrite deterministic matched issue targets
 - model issue writing must fall back to deterministic markdown on API or parsing failures
 - runs should emit synthesis warnings when model-backed synthesis is requested but unavailable

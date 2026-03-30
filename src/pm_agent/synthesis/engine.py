@@ -15,6 +15,7 @@ from pm_agent.synthesis.cluster import build_clusters
 from pm_agent.synthesis.dedup import deduplicate_cluster
 from pm_agent.synthesis.enhancer import AnthropicSynthesisEnhancer
 from pm_agent.synthesis.normalize import collect_findings
+from pm_agent.synthesis.portfolio import PortfolioCandidate, apply_issue_budget
 from pm_agent.synthesis.score import score_cluster
 from pm_agent.synthesis.writer import build_issue_proposal
 
@@ -47,6 +48,7 @@ class SynthesisEngine:
             AnthropicSynthesisEnhancer(
                 client,
                 cluster_review_enabled=config.anthropic.cluster_review_enabled,
+                portfolio_review_enabled=config.anthropic.portfolio_review_enabled,
                 issue_writer_enabled=config.anthropic.issue_writer_enabled,
             )
         )
@@ -63,7 +65,7 @@ class SynthesisEngine:
             return SynthesisReport()
 
         clusters = build_clusters(findings)
-        proposals = []
+        proposal_candidates: list[PortfolioCandidate] = []
         suppressed = []
         warnings: list[str] = list(self._default_warnings)
 
@@ -156,32 +158,33 @@ class SynthesisEngine:
                 except AnthropicAdapterError as exc:
                     warnings.append(f"anthropic_synthesis_fallback: {exc}")
 
-            proposals.append(
-                build_issue_proposal(
-                    cluster,
-                    ice,
-                    final_dedup,
-                    proposal_labels,
-                    title=proposal_title,
-                    summary=proposal_summary,
-                    user_problem=proposal_user_problem,
-                    evidence_summary=proposal_evidence_summary,
-                    issue_body_markdown=proposal_body,
+            proposal_candidates.append(
+                PortfolioCandidate(
+                    cluster=cluster,
+                    ice=ice,
+                    proposal=build_issue_proposal(
+                        cluster,
+                        ice,
+                        final_dedup,
+                        proposal_labels,
+                        title=proposal_title,
+                        summary=proposal_summary,
+                        user_problem=proposal_user_problem,
+                        evidence_summary=proposal_evidence_summary,
+                        issue_body_markdown=proposal_body,
+                    ),
                 )
             )
 
-        proposals = sorted(proposals, key=lambda proposal: proposal.ice.priority_score, reverse=True)
-        if len(proposals) > issue_policy.max_new_issues_per_run:
-            kept = proposals[: issue_policy.max_new_issues_per_run]
-            for proposal in proposals[issue_policy.max_new_issues_per_run :]:
-                suppressed.append(
-                    SuppressedCluster(
-                        cluster_id=proposal.cluster_id,
-                        title=proposal.title,
-                        reason="issue_budget_exceeded",
-                    )
-                )
-            proposals = kept
+        proposals, budget_suppressed, budget_warnings = apply_issue_budget(
+            proposal_candidates,
+            product=synthesis_input.product,
+            memory_digest=synthesis_input.memory_digest,
+            issue_policy=issue_policy,
+            enhancer=self._enhancer,
+        )
+        suppressed.extend(budget_suppressed)
+        warnings.extend(budget_warnings)
 
         return SynthesisReport(
             clusters=clusters,

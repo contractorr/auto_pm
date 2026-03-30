@@ -45,6 +45,21 @@ def _match_score(cluster: FindingCluster, record: ExistingIssueRecord) -> float:
     return score
 
 
+def _is_strong_match(cluster: FindingCluster, record: ExistingIssueRecord) -> bool:
+    record_text = " ".join([record.title, record.body_summary, *record.labels]).lower()
+    normalized_title = re.sub(r"[^a-z0-9]+", " ", cluster.title.lower()).strip()
+    normalized_record_title = re.sub(r"[^a-z0-9]+", " ", record.title.lower()).strip()
+    if normalized_title and normalized_title == normalized_record_title:
+        return True
+
+    for key in cluster.novelty_keys:
+        normalized_key = re.sub(r"[^a-z0-9]+", " ", key.lower()).strip()
+        if normalized_key and normalized_key in record_text:
+            return True
+
+    return _match_score(cluster, record) >= 0.55
+
+
 def deduplicate_cluster(
     cluster: FindingCluster,
     open_issues: list[ExistingIssueRecord],
@@ -52,7 +67,7 @@ def deduplicate_cluster(
     open_prs: list[ExistingIssueRecord],
 ) -> DedupDecision:
     best_open = max(open_issues, key=lambda record: _match_score(cluster, record), default=None)
-    if best_open is not None and _match_score(cluster, best_open) >= 0.35:
+    if best_open is not None and _is_strong_match(cluster, best_open):
         return DedupDecision(
             action=IssueAction.UPDATE_EXISTING,
             matched_issue_number=best_open.number,
@@ -60,7 +75,7 @@ def deduplicate_cluster(
         )
 
     best_pr = max(open_prs, key=lambda record: _match_score(cluster, record), default=None)
-    if best_pr is not None and _match_score(cluster, best_pr) >= 0.35:
+    if best_pr is not None and _is_strong_match(cluster, best_pr):
         return DedupDecision(
             action=IssueAction.COMMENT_EXISTING,
             matched_issue_number=best_pr.number,
@@ -72,7 +87,7 @@ def deduplicate_cluster(
         key=lambda record: _match_score(cluster, record),
         default=None,
     )
-    if best_closed is not None and _match_score(cluster, best_closed) >= 0.45:
+    if best_closed is not None and _is_strong_match(cluster, best_closed):
         return DedupDecision(
             action=IssueAction.COMMENT_EXISTING,
             matched_issue_number=best_closed.number,
