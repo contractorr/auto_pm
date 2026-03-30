@@ -13,6 +13,7 @@ from pm_agent.harness.loader import load_harness_scenarios
 from pm_agent.harness.runner import HarnessRunner
 from pm_agent.memory.store import load_memory, save_memory
 from pm_agent.models.contracts import Trigger
+from pm_agent.orchestration.artifacts import persist_run_report
 from pm_agent.orchestration.fixtures import load_dry_run_fixture
 from pm_agent.orchestration.lifecycle import apply_writeback_results_to_memory
 from pm_agent.orchestration.live import LiveCollectionRunner
@@ -119,7 +120,14 @@ def _cmd_run_dry(config_path: str, repo_root: str, fixture_path: str) -> int:
                 "capabilities": report.capabilities.model_dump(mode="json"),
                 "proposal_count": len(report.synthesis.proposals),
                 "suppressed_count": len(report.synthesis.suppressed),
+                "artifact_count": len(report.artifacts),
+                "event_count": len(report.events),
                 "proposal_titles": [proposal.title for proposal in report.synthesis.proposals],
+                **(
+                    {"synthesis_warnings": report.synthesis.warnings}
+                    if report.synthesis.warnings
+                    else {}
+                ),
             },
             indent=2,
         )
@@ -163,12 +171,14 @@ def _cmd_run_live(config_path: str, repo_root: str, trigger: str, write_mode: st
                 now=report.run.started_at,
             )
             save_memory(root / config.repo.memory_file, memory)
+    run_report_path = persist_run_report(root, report, writeback=writeback)
     print(
         json.dumps(
             {
                 "repo": report.run.repo,
                 "branch": report.run.branch,
                 "commit_sha": report.run.commit_sha,
+                "run_report_path": str(run_report_path),
                 "capabilities": report.capabilities.model_dump(mode="json"),
                 "agent_statuses": {
                     output.agent.value: output.status.value for output in report.agent_outputs
@@ -180,7 +190,14 @@ def _cmd_run_live(config_path: str, repo_root: str, trigger: str, write_mode: st
                 },
                 "proposal_count": len(report.synthesis.proposals),
                 "suppressed_count": len(report.synthesis.suppressed),
+                "artifact_count": len(report.artifacts),
+                "event_count": len(report.events),
                 "proposal_titles": [proposal.title for proposal in report.synthesis.proposals],
+                **(
+                    {"synthesis_warnings": report.synthesis.warnings}
+                    if report.synthesis.warnings
+                    else {}
+                ),
                 **(
                     {
                         "writeback_mode": writeback.mode,

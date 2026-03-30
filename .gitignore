@@ -7,8 +7,9 @@ __pycache__/
 *.pyd
 *.egg-info/
 .pm-agent-artifacts/
-/.pm-agent-run.json
-/.github/pm-agent-memory.json
+.pm-agent-run.json
+.pm-agent-run.lock
+.github/pm-agent-memory.json
 .venv/
 /PRODUCT.md
 /pm-config.yml

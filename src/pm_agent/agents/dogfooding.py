@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 from pm_agent.adapters.playwright import (
@@ -23,7 +24,46 @@ from pm_agent.models.contracts import (
     Severity,
     SourceRef,
     SourceType,
+    Trigger,
 )
+
+
+def _journey_tokens(journey) -> set[str]:
+    parts = [journey.id, journey.persona or "", journey.start_path]
+    for step in journey.steps:
+        parts.extend([step.id, step.action, step.target or "", step.selector or "", step.wait_for or ""])
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", " ".join(parts).lower())
+        if len(token) >= 3
+    }
+
+
+def _changed_file_tokens(changed_files: list[str]) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", " ".join(changed_files).lower())
+        if len(token) >= 3
+    }
+
+
+def _journeys_for_context(context: AgentExecutionContext):
+    journeys = context.config.dogfooding.journeys
+    if context.run.trigger != Trigger.PUSH or len(journeys) <= 1:
+        return journeys, None
+
+    changed_tokens = _changed_file_tokens(context.changed_files)
+    if not changed_tokens:
+        return journeys[:1], "push trigger detected with no changed files; limited to first journey"
+
+    matched = [
+        journey
+        for journey in journeys
+        if _journey_tokens(journey) & changed_tokens
+    ]
+    if matched:
+        return matched[:2], None
+    return journeys[:1], "push trigger detected with no matching journey hints; limited to first journey"
 
 
 class DogfoodingAgent(BaseAgent):
@@ -45,6 +85,9 @@ class DogfoodingAgent(BaseAgent):
         warnings: list[AgentWarning] = []
         journeys: list[JourneyRun] = []
         findings: list[Finding] = []
+        selected_journeys, selection_warning = _journeys_for_context(context)
+        if selection_warning is not None:
+            warnings.append(AgentWarning(code="dogfooding_downshifted", message=selection_warning))
 
         if not context.config.dogfooding.enabled:
             return DogfoodingAgentOutput(
@@ -97,9 +140,10 @@ class DogfoodingAgent(BaseAgent):
             journeys = self._browser_runner.run(
                 BrowserRunRequest(
                     auth_strategy=context.config.dogfooding.auth_strategy,
-                    journeys=context.config.dogfooding.journeys,
+                    journeys=selected_journeys,
                     base_url=base_url,
                     artifact_root=artifact_root,
+                    credentials=context.config.dogfooding.credentials,
                 )
             )
             findings = self._journey_findings(context, journeys)

@@ -12,13 +12,129 @@ from pm_agent.agents.research import ResearchAgent
 from pm_agent.config.models import PMConfig
 from pm_agent.memory.digest import build_memory_digest
 from pm_agent.memory.store import load_memory, save_memory
-from pm_agent.models.contracts import SynthesisInput, Trigger
-from pm_agent.models.runtime import DryRunReport
+from pm_agent.models.contracts import (
+    AgentName,
+    AgentStatus,
+    AgentWarning,
+    CodebaseAgentOutput,
+    DogfoodingAgentOutput,
+    ExistingIssuesAgentOutput,
+    ResearchAgentOutput,
+    SynthesisInput,
+    Trigger,
+)
+from pm_agent.models.runtime import DryRunReport, SynthesisReport
+from pm_agent.orchestration.artifacts import (
+    build_agent_events,
+    build_synthesis_events,
+    collect_artifacts,
+)
 from pm_agent.orchestration.lifecycle import plan_issue_lifecycle
+from pm_agent.orchestration.locks import FileRunLock, RunLockError
 from pm_agent.repo.discovery import discover_repo_capabilities
-from pm_agent.repo.git import build_run_context
+from pm_agent.repo.git import build_run_context, changed_files
 from pm_agent.repo.product import load_product_context
 from pm_agent.synthesis.engine import SynthesisEngine
+
+
+def _issue_policy_for_trigger(config: PMConfig, trigger: Trigger):
+    if trigger != Trigger.PUSH:
+        return config.issue_policy
+    return config.issue_policy.model_copy(
+        update={
+            "max_new_issues_per_run": min(1, config.issue_policy.max_new_issues_per_run),
+        }
+    )
+
+
+def _skipped_research_output(context: AgentExecutionContext) -> ResearchAgentOutput:
+    return ResearchAgentOutput(
+        agent=AgentName.RESEARCH,
+        status=AgentStatus.SKIPPED,
+        started_at=context.run.started_at,
+        ended_at=context.run.started_at,
+        warnings=[],
+        findings=[],
+        competitors=[],
+        papers=[],
+    )
+
+
+def _locked_outputs(run, message: str):
+    warning = [AgentWarning(code="run_locked", message=message)]
+    return [
+        ResearchAgentOutput(
+            agent=AgentName.RESEARCH,
+            status=AgentStatus.SKIPPED,
+            started_at=run.started_at,
+            ended_at=run.started_at,
+            warnings=warning,
+            findings=[],
+            competitors=[],
+            papers=[],
+        ),
+        CodebaseAgentOutput(
+            agent=AgentName.CODEBASE,
+            status=AgentStatus.SKIPPED,
+            started_at=run.started_at,
+            ended_at=run.started_at,
+            warnings=warning,
+            findings=[],
+            repo_summary="skipped because another run is active",
+            components=[],
+            changed_files=[],
+            hotspot_files=[],
+        ),
+        DogfoodingAgentOutput(
+            agent=AgentName.DOGFOODING,
+            status=AgentStatus.SKIPPED,
+            started_at=run.started_at,
+            ended_at=run.started_at,
+            warnings=warning,
+            findings=[],
+            runtime_mode="unknown",
+            base_url=None,
+            journeys=[],
+        ),
+        ExistingIssuesAgentOutput(
+            agent=AgentName.EXISTING_ISSUES,
+            status=AgentStatus.SKIPPED,
+            started_at=run.started_at,
+            ended_at=run.started_at,
+            warnings=warning,
+            findings=[],
+            open_issues=[],
+            recent_closed_issues=[],
+            open_prs=[],
+        ),
+    ]
+
+
+def _build_run_events(*, run, trigger: Trigger, agent_outputs, synthesis: SynthesisReport):
+    events = [
+        {
+            "timestamp": run.started_at,
+            "code": "run_started",
+            "message": f"live run started with trigger={trigger.value}",
+            "level": "info",
+        }
+    ]
+    if trigger == Trigger.PUSH:
+        events.append(
+            {
+                "timestamp": run.started_at,
+                "code": "push_downshifted",
+                "message": "push trigger downshifted research and issue budget",
+                "level": "info",
+            }
+        )
+    events.extend(event.model_dump(mode="python") for event in build_agent_events(agent_outputs))
+    timestamp = max((output.ended_at for output in agent_outputs), default=run.started_at)
+    events.extend(
+        event.model_dump(mode="python")
+        for event in build_synthesis_events(synthesis, timestamp=timestamp)
+    )
+    return events
 
 
 class LiveCollectionRunner:
@@ -30,12 +146,14 @@ class LiveCollectionRunner:
         dogfooding_agent: DogfoodingAgent | None = None,
         existing_issues_agent: ExistingIssuesAgent | None = None,
         synthesis_engine: SynthesisEngine | None = None,
+        run_lock: FileRunLock | None = None,
     ) -> None:
         self._research_agent = research_agent or ResearchAgent()
         self._codebase_agent = codebase_agent or CodebaseAgent()
         self._dogfooding_agent = dogfooding_agent or DogfoodingAgent()
         self._existing_issues_agent = existing_issues_agent or ExistingIssuesAgent()
-        self._synthesis_engine = synthesis_engine or SynthesisEngine()
+        self._synthesis_engine = synthesis_engine
+        self._run_lock = run_lock or FileRunLock()
 
     def run(
         self,
@@ -49,56 +167,107 @@ class LiveCollectionRunner:
         product = load_product_context(root / config.repo.product_file)
         capabilities = discover_repo_capabilities(root, config)
         run = build_run_context(root, config, trigger=trigger)
+        repo_changed_files = changed_files(root)
         context = AgentExecutionContext(
             run=run,
             product=product,
             config=config,
             repo_root=root,
             capabilities=capabilities,
+            changed_files=repo_changed_files,
         )
         memory = load_memory(root / config.repo.memory_file)
+        synthesis_engine = self._synthesis_engine or SynthesisEngine.from_config(config)
+        issue_policy = _issue_policy_for_trigger(config, trigger)
+        lease = None
 
-        research_output = self._research_agent.run(context)
-        codebase_output = self._codebase_agent.run(context)
-        dogfooding_output = self._dogfooding_agent.run(context)
-        existing_issues_output = self._existing_issues_agent.run(context)
-
-        synthesis_input = SynthesisInput(
-            run=run,
-            product=product,
-            memory_digest=build_memory_digest(memory),
-            research=research_output,
-            codebase=codebase_output,
-            dogfooding=dogfooding_output,
-            existing_issues=existing_issues_output,
-        )
-        synthesis = self._synthesis_engine.run(
-            synthesis_input,
-            issue_policy=config.issue_policy,
-            memory=memory,
-            base_labels=config.github.labels,
-        )
-        lifecycle_proposals, updated_memory = plan_issue_lifecycle(
-            synthesis=synthesis,
-            existing_issues=existing_issues_output,
-            issue_policy=config.issue_policy,
-            github_config=config.github,
-            memory=memory,
-            run_started_at=run.started_at,
-            base_labels=config.github.labels,
-        )
-        if lifecycle_proposals:
-            synthesis.proposals = sorted(
-                [*synthesis.proposals, *lifecycle_proposals],
-                key=lambda proposal: proposal.ice.priority_score,
-                reverse=True,
+        try:
+            lease = self._run_lock.acquire(
+                lock_path=root / ".pm-agent-run.lock",
+                run_id=run.run_id,
+                repo=config.repo.full_name,
+                trigger=trigger.value,
             )
-        if persist_memory:
-            save_memory(root / config.repo.memory_file, updated_memory)
-        return DryRunReport(
-            run=run,
-            product=product,
-            capabilities=capabilities,
-            agent_outputs=[research_output, codebase_output, dogfooding_output, existing_issues_output],
-            synthesis=synthesis,
-        )
+        except RunLockError as exc:
+            message = str(exc)
+            return DryRunReport(
+                run=run,
+                product=product,
+                capabilities=capabilities,
+                agent_outputs=_locked_outputs(run, message),
+                synthesis=SynthesisReport(warnings=[f"run_locked: {message}"]),
+                events=[
+                    {
+                        "timestamp": run.started_at,
+                        "code": "run_locked",
+                        "message": message,
+                        "level": "warning",
+                    }
+                ],
+            )
+
+        try:
+            research_output = (
+                _skipped_research_output(context)
+                if trigger == Trigger.PUSH
+                else self._research_agent.run(context)
+            )
+            codebase_output = self._codebase_agent.run(context)
+            dogfooding_output = self._dogfooding_agent.run(context)
+            existing_issues_output = self._existing_issues_agent.run(context)
+
+            synthesis_input = SynthesisInput(
+                run=run,
+                product=product,
+                memory_digest=build_memory_digest(memory),
+                research=research_output,
+                codebase=codebase_output,
+                dogfooding=dogfooding_output,
+                existing_issues=existing_issues_output,
+            )
+            synthesis = synthesis_engine.run(
+                synthesis_input,
+                issue_policy=issue_policy,
+                memory=memory,
+                base_labels=config.github.labels,
+            )
+            lifecycle_proposals, updated_memory = plan_issue_lifecycle(
+                synthesis=synthesis,
+                existing_issues=existing_issues_output,
+                issue_policy=issue_policy,
+                github_config=config.github,
+                memory=memory,
+                run_started_at=run.started_at,
+                base_labels=config.github.labels,
+            )
+            if lifecycle_proposals:
+                synthesis.proposals = sorted(
+                    [*synthesis.proposals, *lifecycle_proposals],
+                    key=lambda proposal: proposal.ice.priority_score,
+                    reverse=True,
+                )
+            if persist_memory:
+                save_memory(root / config.repo.memory_file, updated_memory)
+            agent_outputs = [
+                research_output,
+                codebase_output,
+                dogfooding_output,
+                existing_issues_output,
+            ]
+            return DryRunReport(
+                run=run,
+                product=product,
+                capabilities=capabilities,
+                agent_outputs=agent_outputs,
+                synthesis=synthesis,
+                artifacts=collect_artifacts(agent_outputs),
+                events=_build_run_events(
+                    run=run,
+                    trigger=trigger,
+                    agent_outputs=agent_outputs,
+                    synthesis=synthesis,
+                ),
+            )
+        finally:
+            if lease is not None:
+                lease.release()

@@ -18,12 +18,16 @@ This first pass establishes the build-ready skeleton:
 - a spec manifest and checker
 - a replay harness for agent outputs
 - local capability discovery and `PRODUCT.md` loading
+- manifest-based codebase retrieval and deterministic component summaries
 - deterministic dry-run synthesis from fixture inputs
 - live local collection from a checked-out repo plus GitHub issue ingestion
 - reusable GitHub Actions workflow support for scheduled or push-driven execution in target repos
+- optional Anthropic-backed synthesis review and issue writing with deterministic fallback
 - architecture tests that keep the repo spec-driven over time
 
 Live integrations with GitHub, Anthropic, Playwright, Docker, and arXiv come next.
+
+Each live run also persists a structured JSON report under `.pm-agent-artifacts/<run_id>/run-report.json` and refreshes `.pm-agent-run.json` at the repo root for quick inspection and workflow artifact upload.
 
 ## Commands
 
@@ -48,11 +52,15 @@ For live dogfooding, install the browser once:
 python -m playwright install chromium
 ```
 
+To dogfood a deployed site instead of starting a local instance, set `runtime.mode: external_url`, point `runtime.service_urls` at the live base URL, and use `dogfooding.auth_strategy: credentials` with env-backed secrets. Remote login forms can then use standard `fill` steps with `{{ credentials.username }}`, `{{ credentials.password }}`, and `{{ credentials.totp_code }}` placeholders.
+
 For GitHub writeback, export `GITHUB_TOKEN` first. Safe rollout order:
 
 1. `write_mode: disabled`
 2. `--write-mode comment_only`
 3. `--write-mode apply`
+
+For model-backed synthesis, enable the `anthropic` block in `pm-config.yml` and export the configured API key env var. If the key is missing, synthesis falls back to deterministic behavior and emits a warning in the CLI JSON output.
 
 ## Automation
 
@@ -87,6 +95,7 @@ jobs:
 ```
 
 If the target repo wants long-lived calibration, keep `persist_memory_commit: true` so `.github/pm-agent-memory.json` is committed back automatically when it changes.
+Workflow uploads now include the machine-readable run report plus the `.pm-agent-artifacts/` directory, which captures dogfooding screenshots and accessibility snapshots when present.
 
 ## Local-only Files
 

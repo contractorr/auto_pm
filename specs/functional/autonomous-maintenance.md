@@ -35,3 +35,6 @@ The project should remain operable without frequent human babysitting.
 - this repository must ship a reusable workflow that a target repository can call on `push`, `schedule`, or `workflow_dispatch`
 - the reusable workflow must support optional Playwright browser installation and optional memory-file commits
 - the real `pm-config.yml` and `PRODUCT.md` belong in the target repository, not in this code repository
+- `push` runs should intentionally downshift expensive work rather than mirroring the full scheduled sweep
+- overlapping live runs for the same repo target should be prevented by workflow concurrency and by a local lock file in the checked-out repo
+- each live run should persist a structured JSON report plus indexed artifacts so issue creation and suppression decisions are auditable after the fact

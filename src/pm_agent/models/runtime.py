@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from pm_agent.models.contracts import (
@@ -54,6 +56,23 @@ class SynthesisReport(BaseModel):
     clusters: list[FindingCluster] = Field(default_factory=list)
     proposals: list[IssueProposal] = Field(default_factory=list)
     suppressed: list[SuppressedCluster] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ArtifactRecord(BaseModel):
+    kind: str
+    path: str
+    agent: AgentName
+    journey_id: str | None = None
+    step_id: str | None = None
+
+
+class RunEvent(BaseModel):
+    timestamp: datetime
+    code: str
+    message: str
+    level: str = "info"
+    agent: AgentName | None = None
 
 
 class DryRunReport(BaseModel):
@@ -62,6 +81,8 @@ class DryRunReport(BaseModel):
     capabilities: CapabilitySnapshot
     agent_outputs: list[AgentEnvelope] = Field(default_factory=list)
     synthesis: SynthesisReport
+    artifacts: list[ArtifactRecord] = Field(default_factory=list)
+    events: list[RunEvent] = Field(default_factory=list)
 
 
 class WritebackActionResult(BaseModel):

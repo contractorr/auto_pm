@@ -26,6 +26,33 @@ def _git_output(repo_root: Path, *args: str) -> str | None:
     return completed.stdout.strip() or None
 
 
+def changed_files(repo_root: str | Path, *, max_files: int = 25) -> list[str]:
+    root = Path(repo_root)
+    changed: list[str] = []
+
+    working_tree = _git_output(root, "status", "--porcelain", "--untracked-files=no")
+    if working_tree:
+        for line in working_tree.splitlines():
+            path = line[3:].strip()
+            if path:
+                changed.append(path.replace("\\", "/"))
+
+    last_commit = _git_output(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")
+    if last_commit:
+        changed.extend(path.replace("\\", "/") for path in last_commit.splitlines() if path.strip())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for path in changed:
+        if path in seen:
+            continue
+        deduped.append(path)
+        seen.add(path)
+        if len(deduped) >= max_files:
+            break
+    return deduped
+
+
 def build_run_context(repo_root: str | Path, config: PMConfig, trigger: Trigger = Trigger.MANUAL) -> RunContext:
     root = Path(repo_root)
     branch = _git_output(root, "rev-parse", "--abbrev-ref", "HEAD") or config.repo.default_branch

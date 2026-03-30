@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from enum import Enum
 from pathlib import Path
 
@@ -75,6 +76,79 @@ class RuntimeConfig(BaseModel):
     healthcheck_timeout_seconds: int = 120
 
 
+class SecretValueConfig(BaseModel):
+    value: str | None = None
+    env: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "SecretValueConfig":
+        if bool(self.value) == bool(self.env):
+            raise ValueError("secret value requires exactly one of value or env")
+        return self
+
+    def is_available(self) -> bool:
+        if self.value:
+            return True
+        if self.env:
+            return bool(os.getenv(self.env))
+        return False
+
+    def resolve(self, field_name: str) -> str:
+        if self.value:
+            return self.value
+        if not self.env:
+            raise ValueError(f"{field_name} is not configured")
+        value = os.getenv(self.env)
+        if not value:
+            raise ValueError(f"{field_name} env var is not set: {self.env}")
+        return value
+
+
+class TotpConfig(BaseModel):
+    secret: SecretValueConfig
+    digits: int = 6
+    period_seconds: int = 30
+    algorithm: str = "SHA1"
+
+    @field_validator("digits")
+    @classmethod
+    def validate_digits(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("digits must be positive")
+        return value
+
+    @field_validator("period_seconds")
+    @classmethod
+    def validate_period_seconds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("period_seconds must be positive")
+        return value
+
+    @field_validator("algorithm")
+    @classmethod
+    def normalize_algorithm(cls, value: str) -> str:
+        normalized = value.upper()
+        if normalized not in {"SHA1", "SHA256", "SHA512"}:
+            raise ValueError("algorithm must be one of SHA1, SHA256, or SHA512")
+        return normalized
+
+
+class CredentialsAuthConfig(BaseModel):
+    username: SecretValueConfig
+    password: SecretValueConfig
+    totp: TotpConfig | None = None
+
+    def missing_fields(self) -> list[str]:
+        missing: list[str] = []
+        if not self.username.is_available():
+            missing.append("username")
+        if not self.password.is_available():
+            missing.append("password")
+        if self.totp is not None and not self.totp.secret.is_available():
+            missing.append("totp.secret")
+        return missing
+
+
 class JourneyStepConfig(BaseModel):
     id: str
     action: str
@@ -96,13 +170,31 @@ class JourneyConfig(BaseModel):
 class DogfoodingConfig(BaseModel):
     enabled: bool = True
     auth_strategy: AuthStrategy = AuthStrategy.NONE
+    credentials: CredentialsAuthConfig | None = None
     setup_script: Path | None = None
     journeys: list[JourneyConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_auth_requirements(self) -> "DogfoodingConfig":
+        if self.auth_strategy == AuthStrategy.CREDENTIALS and self.credentials is None:
+            raise ValueError("dogfooding.credentials is required when auth_strategy=credentials")
+        return self
 
 
 class ResearchConfig(BaseModel):
     competitors: list[str] = Field(default_factory=list)
     arxiv_categories: list[str] = Field(default_factory=list)
+
+
+class AnthropicConfig(BaseModel):
+    enabled: bool = False
+    api_key_env: str = "ANTHROPIC_API_KEY"
+    api_base_url: str = "https://api.anthropic.com"
+    model: str = "claude-3-7-sonnet-latest"
+    max_tokens: int = 1800
+    temperature: float = 0.0
+    cluster_review_enabled: bool = True
+    issue_writer_enabled: bool = True
 
 
 class GitHubConfig(BaseModel):
@@ -127,5 +219,6 @@ class PMConfig(BaseModel):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     dogfooding: DogfoodingConfig = Field(default_factory=DogfoodingConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
+    anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
     github: GitHubConfig = Field(default_factory=GitHubConfig)
     issue_policy: IssuePolicyConfig = Field(default_factory=IssuePolicyConfig)

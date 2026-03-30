@@ -1,16 +1,14 @@
-"""Local codebase agent using conservative repository heuristics."""
+"""Local codebase agent using manifest-based repository retrieval."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 from pm_agent.agents.base import AgentExecutionContext, BaseAgent
 from pm_agent.models.contracts import (
     AgentName,
     AgentStatus,
     CodebaseAgentOutput,
-    ComponentSummary,
     Evidence,
     Finding,
     FindingKind,
@@ -18,62 +16,13 @@ from pm_agent.models.contracts import (
     SourceRef,
     SourceType,
 )
-
-CODE_SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".yml", ".yaml"}
-TEST_MARKERS = ("test", "spec")
-
-
-def _line_count(path: Path) -> int:
-    try:
-        return len(path.read_text(encoding="utf-8", errors="ignore").splitlines())
-    except OSError:
-        return 0
+from pm_agent.repo.manifest import RepoManifest, build_repo_manifest
+from pm_agent.repo.retrieval import hotspot_files
+from pm_agent.repo.summarizer import summarize_components, summarize_repo
 
 
-def _iter_files(root: Path, ignore_paths: list[Path]) -> list[Path]:
-    ignore_parts = {path.parts[0] for path in ignore_paths if path.parts}
-    files: list[Path] = []
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in ignore_parts for part in path.relative_to(root).parts):
-            continue
-        if path.suffix.lower() in CODE_SUFFIXES:
-            files.append(path)
-    return files
-
-
-def _component_candidates(repo_root: Path, project_roots: list[Path]) -> list[ComponentSummary]:
-    base_root = repo_root.resolve()
-    components: list[ComponentSummary] = []
-    for project_root in project_roots:
-        root = (base_root / project_root).resolve()
-        if not root.exists() or not root.is_dir():
-            continue
-        for child in sorted(root.iterdir(), key=lambda path: path.name.lower()):
-            if not child.is_dir() or child.name.startswith("."):
-                continue
-            files = [
-                path
-                for path in child.rglob("*")
-                if path.is_file() and path.suffix.lower() in {".py", ".ts", ".tsx", ".js", ".jsx"}
-            ]
-            if not files:
-                continue
-            components.append(
-                ComponentSummary(
-                    name=child.name,
-                    paths=[str(child.relative_to(base_root)).replace("\\", "/")],
-                    responsibilities=[f"Contains {len(files)} source files."],
-                    risks=[],
-                )
-            )
-    return components[:10]
-
-
-def _build_findings(context: AgentExecutionContext, files: list[Path]) -> list[Finding]:
+def _build_findings(context: AgentExecutionContext, manifest: RepoManifest) -> list[Finding]:
     findings: list[Finding] = []
-    repo_root = context.repo_root
     caps = context.capabilities
     timestamp = context.run.run_id
 
@@ -139,8 +88,7 @@ def _build_findings(context: AgentExecutionContext, files: list[Path]) -> list[F
             )
         )
 
-    has_tests = any(any(marker in path.name.lower() for marker in TEST_MARKERS) for path in files)
-    if not has_tests:
+    if not manifest.test_files:
         findings.append(
             Finding(
                 finding_id=f"{timestamp}-missing-tests",
@@ -156,17 +104,47 @@ def _build_findings(context: AgentExecutionContext, files: list[Path]) -> list[F
                 tags=["testing"],
                 evidence=[
                     Evidence(
-                        summary="Repository scan found no test or spec files.",
+                        summary="Repository manifest found no test, spec, or e2e files.",
                         source_refs=[
                             SourceRef(
                                 source_type=SourceType.REPO_FILE,
-                                source_id="repo-scan",
-                                locator=str(repo_root),
+                                source_id="repo-manifest",
+                                locator=context.repo_root.as_posix(),
                             )
                         ],
                     )
                 ],
                 proposed_direction="Add at least a smoke test layer before enabling autonomous lifecycle actions.",
+            )
+        )
+
+    if manifest.source_files and not manifest.doc_files:
+        findings.append(
+            Finding(
+                finding_id=f"{timestamp}-missing-docs",
+                agent=AgentName.CODEBASE,
+                kind=FindingKind.PRODUCT_GAP,
+                title="Repo has little or no supporting documentation",
+                problem_statement="The repository has source files but no markdown documentation beyond config-level metadata.",
+                user_impact="Agents and maintainers have less context for prioritization, onboarding, and issue triage.",
+                severity=Severity.LOW,
+                raw_confidence=0.7,
+                novelty_key="missing-repo-docs",
+                dedup_keys=["missing-repo-docs"],
+                tags=["docs"],
+                evidence=[
+                    Evidence(
+                        summary="Repository manifest found source files but no markdown docs.",
+                        source_refs=[
+                            SourceRef(
+                                source_type=SourceType.REPO_DOC,
+                                source_id="repo-manifest",
+                                locator=context.repo_root.as_posix(),
+                            )
+                        ],
+                    )
+                ],
+                proposed_direction="Add lightweight technical docs or feature notes for primary components.",
             )
         )
 
@@ -178,21 +156,14 @@ class CodebaseAgent(BaseAgent):
 
     def run(self, context: AgentExecutionContext) -> CodebaseAgentOutput:
         started_at = datetime.now(UTC)
-        files = _iter_files(context.repo_root, context.config.repo.ignore_paths)
-        components = _component_candidates(context.repo_root, context.config.repo.project_roots)
-        hotspot_files = [
-            str(path.relative_to(context.repo_root)).replace("\\", "/")
-            for path in sorted(files, key=_line_count, reverse=True)[:5]
-            if _line_count(path) >= 200
-        ]
-        test_files = sum(1 for path in files if any(marker in path.name.lower() for marker in TEST_MARKERS))
-        doc_files = sum(1 for path in files if path.suffix.lower() == ".md")
-        findings = _build_findings(context, files)
-        repo_summary = (
-            f"Scanned {len(files)} tracked source/docs files across "
-            f"{len(components)} component directories, {doc_files} markdown docs, "
-            f"and {test_files} detected test files."
+        manifest = build_repo_manifest(
+            context.repo_root,
+            project_roots=context.config.repo.project_roots,
+            ignore_paths=context.config.repo.ignore_paths,
         )
+        components = summarize_components(manifest)
+        findings = _build_findings(context, manifest)
+        repo_summary = summarize_repo(manifest, components=components)
         return CodebaseAgentOutput(
             agent=AgentName.CODEBASE,
             status=AgentStatus.SUCCESS,
@@ -201,6 +172,6 @@ class CodebaseAgent(BaseAgent):
             findings=findings,
             repo_summary=repo_summary,
             components=components,
-            changed_files=[],
-            hotspot_files=hotspot_files,
+            changed_files=context.changed_files,
+            hotspot_files=hotspot_files(manifest),
         )

@@ -18,6 +18,7 @@ class AgentExecutionContext(BaseModel):
     config: PMConfig
     repo_root: Path
     capabilities: CapabilitySnapshot | None = None
+    changed_files: list[str] = []
 
 
 class BaseAgent(ABC):

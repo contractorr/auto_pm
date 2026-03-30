@@ -4,7 +4,7 @@
 
 1. normalize findings
 2. deterministically cluster candidates
-3. use an LLM only for borderline merge decisions and issue writing
+3. optionally use an LLM for conservative cluster review and issue writing
 4. apply anchored ICE scoring
 5. deduplicate against issues, PRs, and memory
 6. emit issue actions
@@ -17,6 +17,16 @@ Before any model-backed synthesis is enabled, the repository must support:
 - deterministic ICE heuristics
 - explicit suppression reasons for non-issue-worthy clusters
 - dry-run issue rendering with hidden metadata
+
+## Optional Model-Backed Review
+
+When Anthropic-backed synthesis is enabled:
+
+- deterministic scoring and deduplication remain authoritative
+- model review may refine wording or suppress weak unmatched proposals
+- model review must not rewrite deterministic matched issue targets
+- model issue writing must fall back to deterministic markdown on API or parsing failures
+- runs should emit synthesis warnings when model-backed synthesis is requested but unavailable
 
 Deterministic research findings should be conservative:
 

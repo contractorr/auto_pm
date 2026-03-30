@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pm_agent.config.models import AuthStrategy, JourneyConfig, JourneyStepConfig
+from pm_agent.config.models import (
+    AuthStrategy,
+    CredentialsAuthConfig,
+    JourneyConfig,
+    JourneyStepConfig,
+)
 from pm_agent.models.contracts import JourneyRun, JourneyStepResult
+
+_CREDENTIAL_PLACEHOLDER_PATTERN = re.compile(
+    r"\{\{\s*credentials\.(username|password|totp_code)\s*\}\}"
+)
 
 
 class BrowserAdapterError(RuntimeError):
@@ -22,6 +36,22 @@ class BrowserRunRequest:
     journeys: list[JourneyConfig]
     base_url: str
     artifact_root: Path
+    credentials: CredentialsAuthConfig | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedTotpConfig:
+    secret: str
+    digits: int
+    period_seconds: int
+    algorithm: str
+
+
+@dataclass(frozen=True)
+class ResolvedCredentials:
+    username: str
+    password: str
+    totp: ResolvedTotpConfig | None = None
 
 
 class PlaywrightBrowserRunner:
@@ -38,6 +68,7 @@ class PlaywrightBrowserRunner:
 
         request.artifact_root.mkdir(parents=True, exist_ok=True)
         journeys: list[JourneyRun] = []
+        credentials = _resolve_credentials(request)
 
         try:
             with sync_playwright() as playwright:
@@ -68,6 +99,7 @@ class PlaywrightBrowserRunner:
                                     page=page,
                                     journey=journey,
                                     request=request,
+                                    credentials=credentials,
                                     console_errors=console_errors,
                                     network_failures=network_failures,
                                 )
@@ -87,6 +119,7 @@ class PlaywrightBrowserRunner:
         page: Any,
         journey: JourneyConfig,
         request: BrowserRunRequest,
+        credentials: ResolvedCredentials | None,
         console_errors: list[str],
         network_failures: list[str],
     ) -> JourneyRun:
@@ -104,7 +137,7 @@ class PlaywrightBrowserRunner:
             action_error: str | None = None
 
             try:
-                self._perform_step(page, step, request.auth_strategy)
+                self._perform_step(page, step, request.auth_strategy, credentials)
                 if step.expect_url:
                     page.wait_for_url(f"**{step.expect_url}", timeout=step.timeout_ms)
                 if step.wait_for:
@@ -157,7 +190,13 @@ class PlaywrightBrowserRunner:
             steps=results,
         )
 
-    def _perform_step(self, page: Any, step: JourneyStepConfig, auth_strategy: AuthStrategy) -> None:
+    def _perform_step(
+        self,
+        page: Any,
+        step: JourneyStepConfig,
+        auth_strategy: AuthStrategy,
+        credentials: ResolvedCredentials | None,
+    ) -> None:
         timeout = step.timeout_ms
         if step.action == "goto":
             if not step.target:
@@ -174,7 +213,12 @@ class PlaywrightBrowserRunner:
         if step.action == "fill":
             if not step.selector:
                 raise BrowserAdapterError("fill step requires selector")
-            page.locator(step.selector).first.fill(step.value or "", timeout=timeout)
+            value = _resolve_step_value(
+                step.value or "",
+                auth_strategy=auth_strategy,
+                credentials=credentials,
+            )
+            page.locator(step.selector).first.fill(value, timeout=timeout)
             return
 
         if step.action == "sign_in_test_user":
@@ -211,3 +255,78 @@ def _join_url(base_or_current: str, path: str) -> str:
         if match:
             return f"{match.group(1)}{path}"
     return f"{base}/{path.lstrip('/')}"
+
+
+def _resolve_credentials(request: BrowserRunRequest) -> ResolvedCredentials | None:
+    if request.auth_strategy != AuthStrategy.CREDENTIALS:
+        return None
+    if request.credentials is None:
+        raise BrowserAdapterError("credentials auth requires dogfooding.credentials")
+
+    try:
+        username = request.credentials.username.resolve("dogfooding.credentials.username")
+        password = request.credentials.password.resolve("dogfooding.credentials.password")
+        resolved_totp = None
+        if request.credentials.totp is not None:
+            resolved_totp = ResolvedTotpConfig(
+                secret=request.credentials.totp.secret.resolve("dogfooding.credentials.totp.secret"),
+                digits=request.credentials.totp.digits,
+                period_seconds=request.credentials.totp.period_seconds,
+                algorithm=request.credentials.totp.algorithm,
+            )
+    except ValueError as exc:
+        raise BrowserAdapterError(str(exc)) from exc
+
+    return ResolvedCredentials(username=username, password=password, totp=resolved_totp)
+
+
+def _resolve_step_value(
+    value: str,
+    *,
+    auth_strategy: AuthStrategy,
+    credentials: ResolvedCredentials | None,
+) -> str:
+    if "{{" not in value:
+        return value
+
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(1)
+        if auth_strategy != AuthStrategy.CREDENTIALS or credentials is None:
+            raise BrowserAdapterError(
+                f"placeholder {match.group(0)} requires auth_strategy=credentials"
+            )
+        if token == "username":
+            return credentials.username
+        if token == "password":
+            return credentials.password
+        if token == "totp_code":
+            if credentials.totp is None:
+                raise BrowserAdapterError(
+                    "placeholder {{ credentials.totp_code }} requires dogfooding.credentials.totp"
+                )
+            return _generate_totp(credentials.totp)
+        raise BrowserAdapterError(f"unsupported credentials placeholder: {token}")
+
+    return _CREDENTIAL_PLACEHOLDER_PATTERN.sub(replace, value)
+
+
+def _generate_totp(config: ResolvedTotpConfig, for_time: int | None = None) -> str:
+    counter = int((time.time() if for_time is None else for_time) // config.period_seconds)
+    counter_bytes = counter.to_bytes(8, byteorder="big")
+    digestmod = getattr(hashlib, config.algorithm.lower(), None)
+    if digestmod is None:
+        raise BrowserAdapterError(f"unsupported TOTP algorithm: {config.algorithm}")
+    digest = hmac.new(_decode_base32_secret(config.secret), counter_bytes, digestmod).digest()
+    offset = digest[-1] & 0x0F
+    code_int = int.from_bytes(digest[offset : offset + 4], byteorder="big") & 0x7FFFFFFF
+    code = code_int % (10 ** config.digits)
+    return str(code).zfill(config.digits)
+
+
+def _decode_base32_secret(secret: str) -> bytes:
+    normalized = secret.strip().replace(" ", "").upper()
+    padded = normalized + ("=" * (-len(normalized) % 8))
+    try:
+        return base64.b32decode(padded, casefold=True)
+    except binascii.Error as exc:
+        raise BrowserAdapterError("invalid TOTP secret; expected a base32-encoded value") from exc

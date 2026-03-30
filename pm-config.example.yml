@@ -19,6 +19,9 @@ triggers:
 
 runtime:
   mode: docker_compose
+  # For remote dogfooding against a live site, switch to `external_url`
+  # and point `service_urls` at the deployed base URL instead.
+  # mode: external_url
   compose_file: docker-compose.yml
   startup_timeout_seconds: 180
   healthcheck_timeout_seconds: 120
@@ -31,6 +34,16 @@ runtime:
 dogfooding:
   enabled: true
   auth_strategy: test_auth
+  # For remote logins, switch to `credentials` and supply env-backed secrets:
+  # auth_strategy: credentials
+  # credentials:
+  #   username:
+  #     env: PM_AGENT_DOGFOOD_USERNAME
+  #   password:
+  #     env: PM_AGENT_DOGFOOD_PASSWORD
+  #   totp:
+  #     secret:
+  #       env: PM_AGENT_DOGFOOD_TOTP_SECRET
   setup_script: web/e2e/fixtures/auth.setup.ts
   journeys:
     - id: login-home
@@ -41,6 +54,22 @@ dogfooding:
           action: sign_in_test_user
           target: junior_dev
           expect_url: /home
+        # For remote credential auth, use normal fill steps with placeholders:
+        # - id: fill-email
+        #   action: fill
+        #   selector: input[name="email"]
+        #   value: "{{ credentials.username }}"
+        # - id: fill-password
+        #   action: fill
+        #   selector: input[name="password"]
+        #   value: "{{ credentials.password }}"
+        # - id: submit-login
+        #   action: click
+        #   selector: button[type="submit"]
+        # - id: fill-totp
+        #   action: fill
+        #   selector: input[name="otp"]
+        #   value: "{{ credentials.totp_code }}"
         - id: visit-home
           action: goto
           target: /home
@@ -53,6 +82,15 @@ research:
   arxiv_categories:
     - cs.HC
     - cs.SE
+
+anthropic:
+  enabled: false
+  api_key_env: ANTHROPIC_API_KEY
+  model: claude-3-7-sonnet-latest
+  max_tokens: 1800
+  temperature: 0.0
+  cluster_review_enabled: true
+  issue_writer_enabled: true
 
 github:
   labels:

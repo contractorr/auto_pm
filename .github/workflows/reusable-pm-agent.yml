@@ -100,6 +100,9 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
+    concurrency:
+      group: pm-agent-${{ github.repository }}-${{ inputs.repo_root }}
+      cancel-in-progress: ${{ inputs.trigger == 'push' }}
     permissions:
       contents: write
       issues: write
@@ -149,13 +152,15 @@ jobs:
             --config "target-repo/${{ inputs.config_path }}" \
             --repo-root "target-repo/${{ inputs.repo_root }}" \
             --trigger "${{ inputs.trigger }}" \
-            --write-mode "${{ inputs.write_mode }}" > "target-repo/.pm-agent-run.json"
+            --write-mode "${{ inputs.write_mode }}"
 
       - name: Upload run report
         uses: actions/upload-artifact@v4
         with:
           name: pm-agent-run-report
-          path: target-repo/.pm-agent-run.json
+          path: |
+            target-repo/.pm-agent-run.json
+            target-repo/.pm-agent-artifacts
           if-no-files-found: error
 
       - name: Commit pm-agent memory

@@ -72,18 +72,25 @@ def build_issue_proposal(
     ice: ICEBreakdown,
     dedup: DedupDecision,
     labels: list[str],
+    *,
+    title: str | None = None,
+    summary: str | None = None,
+    user_problem: str | None = None,
+    evidence_summary: str | None = None,
+    issue_body_markdown: str | None = None,
 ) -> IssueProposal:
     return IssueProposal(
         cluster_id=cluster.cluster_id,
-        title=cluster.title,
-        summary=cluster.problem_statement,
-        user_problem=cluster.user_impact,
-        evidence_summary="; ".join(
+        title=title or cluster.title,
+        summary=summary or cluster.problem_statement,
+        user_problem=user_problem or cluster.user_impact,
+        evidence_summary=evidence_summary
+        or "; ".join(
             evidence.summary for finding in cluster.findings for evidence in finding.evidence
         ),
         affected_surfaces=cluster.affected_surfaces,
         labels=labels,
         ice=ice,
         dedup=dedup,
-        issue_body_markdown=render_issue_markdown(cluster, ice, dedup),
+        issue_body_markdown=issue_body_markdown or render_issue_markdown(cluster, ice, dedup),
     )

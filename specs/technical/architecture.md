@@ -12,9 +12,10 @@
 
 - `config/` owns `pm-config.yml` parsing and validation.
 - `models/` owns stable cross-agent contracts.
-- `repo/` owns product-context loading and local capability discovery.
+- `repo/` owns product-context loading, local capability discovery, manifest building, and retrieval primitives.
 - `agents/` owns data collection and summarization boundaries.
 - `synthesis/` owns normalization, clustering, scoring, deduplication, and issue writing.
+- optional Anthropic-backed synthesis refinement must live behind the deterministic synthesis boundary.
 - `orchestration/` owns dry-run execution and future live run coordination.
 - `memory/` owns persistent calibration data loading and summarization.
 - `harness/` owns replayable scenarios and expectation checks.
@@ -26,6 +27,9 @@
 - scheduled runs should perform deeper research, broader dogfooding, and lifecycle reconciliation.
 - reusable GitHub Actions workflows should be the primary automation entrypoint for target repositories.
 - target repositories should own the real `pm-config.yml`, `PRODUCT.md`, and persisted `.github/pm-agent-memory.json`.
+- `push` runs should skip heavyweight research, reuse changed-file context across agents, and limit issue creation budgets more aggressively than scheduled runs.
+- overlapping live runs against the same target repo should be serialized through both workflow concurrency and a local repository lock.
+- live runs should persist a structured run report and indexed artifacts under `.pm-agent-artifacts/<run_id>/` for later audit and debugging.
 
 ## Local-First Runtime
 
@@ -44,6 +48,13 @@ The first live execution slice should support:
 2. a GitHub-backed existing-issues agent for open issues, open PRs, and recent closed issues
 3. a live collection runner that feeds these real agent outputs into deterministic synthesis
 4. adapter injection so tests do not depend on live network calls
+
+## Codebase Understanding Contract
+
+- the codebase agent should rely on a deterministic repo manifest instead of ad hoc directory walking
+- repo summaries should include component-level structure, hotspot files, and changed-file context when git metadata is available
+- the codebase agent may later add model-backed summarization, but manifest and retrieval logic should remain reusable without a model
+- dogfooding on `push` should scope journeys using changed-file hints and fall back to a minimal safe subset when no match is found
 
 ## Deterministic Research Slice
 

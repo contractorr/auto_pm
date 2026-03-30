@@ -1,5 +1,6 @@
-"""Deterministic synthesis pipeline."""
+"""Synthesis pipeline."""
 
 from pm_agent.synthesis.engine import SynthesisEngine
+from pm_agent.synthesis.enhancer import AnthropicSynthesisEnhancer
 
-__all__ = ["SynthesisEngine"]
+__all__ = ["AnthropicSynthesisEnhancer", "SynthesisEngine"]
