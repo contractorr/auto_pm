@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from pathlib import Path
 
 from pm_agent.repo.manifest import ManifestEntry, RepoManifest
 
@@ -52,3 +53,38 @@ def hotspot_files(manifest: RepoManifest, *, limit: int = 5, min_lines: int = 12
         if entry.line_count >= min_lines
     ]
     return entries
+
+
+def representative_file_context(
+    repo_root: str | Path,
+    manifest: RepoManifest,
+    *,
+    limit_per_component: int = 2,
+    hotspot_limit: int = 3,
+    max_chars: int = 700,
+) -> list[dict[str, object]]:
+    root = Path(repo_root)
+    selected = select_component_entries(manifest, limit_per_component=limit_per_component)
+    by_path = {entry.path: entry for entries in selected.values() for entry in entries}
+    for hotspot in hotspot_files(manifest, limit=hotspot_limit):
+        entry = next((item for item in manifest.entries if item.path == hotspot), None)
+        if entry is not None:
+            by_path.setdefault(entry.path, entry)
+
+    contexts: list[dict[str, object]] = []
+    for entry in sorted(by_path.values(), key=_entry_score, reverse=True):
+        file_path = root / entry.path
+        try:
+            excerpt = file_path.read_text(encoding="utf-8", errors="ignore")[:max_chars].strip()
+        except OSError:
+            excerpt = ""
+        contexts.append(
+            {
+                "path": entry.path,
+                "category": entry.category,
+                "component_key": entry.component_key,
+                "line_count": entry.line_count,
+                "excerpt": excerpt,
+            }
+        )
+    return contexts

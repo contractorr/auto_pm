@@ -194,6 +194,7 @@ class AnthropicConfig(BaseModel):
     max_tokens: int = 1800
     temperature: float = 0.0
     research_review_enabled: bool = True
+    codebase_review_enabled: bool = True
     cluster_review_enabled: bool = True
     portfolio_review_enabled: bool = True
     issue_writer_enabled: bool = True

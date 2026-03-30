@@ -53,7 +53,8 @@ The first live execution slice should support:
 
 - the codebase agent should rely on a deterministic repo manifest instead of ad hoc directory walking
 - repo summaries should include component-level structure, hotspot files, and changed-file context when git metadata is available
-- the codebase agent may later add model-backed summarization, but manifest and retrieval logic should remain reusable without a model
+- optional model-backed codebase review may refine summaries, components, and findings, but manifest and retrieval logic should remain reusable without a model
+- missing API keys or model failures must fall back to deterministic repo understanding with explicit warnings
 - dogfooding on `push` should scope journeys using changed-file hints and fall back to a minimal safe subset when no match is found
 
 ## Deterministic Research Slice

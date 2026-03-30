@@ -19,6 +19,7 @@ This first pass establishes the build-ready skeleton:
 - a replay harness for agent outputs
 - local capability discovery and `PRODUCT.md` loading
 - manifest-based codebase retrieval and deterministic component summaries
+- optional Anthropic-backed codebase review with deterministic fallback
 - deterministic dry-run synthesis from fixture inputs
 - live local collection from a checked-out repo plus GitHub issue ingestion
 - reusable GitHub Actions workflow support for scheduled or push-driven execution in target repos

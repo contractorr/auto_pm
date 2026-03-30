@@ -90,6 +90,7 @@ anthropic:
   max_tokens: 1800
   temperature: 0.0
   research_review_enabled: true
+  codebase_review_enabled: true
   cluster_review_enabled: true
   portfolio_review_enabled: true
   issue_writer_enabled: true
